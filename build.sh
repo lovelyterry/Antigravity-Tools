@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Antigravity Tools - Linux 编译脚本 (Web Server / Standalone)
+# Antigravity Tools - Linux 编译脚本 (纯 Headless Axum Web Server 后台服务)
 # ==============================================================================
 set -euo pipefail
 
@@ -14,8 +14,24 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# 优先加载 Rustup 环境
+if [ -f "$HOME/.cargo/env" ]; then
+    # shellcheck source=/dev/null
+    source "$HOME/.cargo/env"
+fi
+
+# 配置 libclang 路径供 bindgen 使用
+if [ -z "${LIBCLANG_PATH:-}" ]; then
+    for p in /usr/lib/llvm-14/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib; do
+        if [ -f "$p/libclang.so" ] || [ -f "$p/libclang.so.1" ]; then
+            export LIBCLANG_PATH="$p"
+            break
+        fi
+    done
+fi
+
 echo -e "${CYAN}=====================================================${NC}"
-echo -e "${CYAN}     Antigravity Tools Linux 编译脚本 (Web Server)    ${NC}"
+echo -e "${CYAN}  Antigravity Tools 编译脚本 (Headless Web Server)   ${NC}"
 echo -e "${CYAN}=====================================================${NC}"
 
 # 1. 检查基础开发工具
@@ -29,7 +45,7 @@ check_tool() {
 
 echo -e "\n${YELLOW}[1/4] 检查编译工具链...${NC}"
 MISSING_TOOLS=0
-for tool in node npm cargo rustc pkg-config gcc; do
+for tool in node npm cargo rustc pkg-config gcc g++ cmake clang; do
     if ! check_tool "$tool"; then
         MISSING_TOOLS=1
     fi
@@ -37,19 +53,16 @@ done
 
 if [ "$MISSING_TOOLS" -ne 0 ]; then
     echo -e "\n${YELLOW}提示：在基于 Debian / Ubuntu 的系统上，您可以通过以下命令安装必要依赖：${NC}"
-    echo -e "  sudo apt-get update && sudo apt-get install -y \\"
-    echo -e "    build-essential pkg-config curl wget file libssl-dev \\"
-    echo -e "    libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \\"
-    echo -e "    librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev"
+    echo -e "  sudo apt-get update && sudo apt-get install -y build-essential cmake clang libclang-dev pkg-config libssl-dev curl wget"
     echo -e "\n在 Arch Linux 上："
-    echo -e "  sudo pacman -S --needed base-devel webkit2gtk-4.1 openssl npm rust"
-    echo -e "\n在 Fedora 上："
-    echo -e "  sudo dnf install webkit2gtk4.1-devel openssl-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel"
+    echo -e "  sudo pacman -S --needed base-devel cmake clang openssl npm rust"
+    echo -e "\n在 Fedora / RHEL 上："
+    echo -e "  sudo dnf install gcc gcc-c++ make cmake clang libclang pkgconfig openssl-devel nodejs npm rust cargo"
     exit 1
 fi
 echo -e "${GREEN}✓ 工具链检查通过 (Node $(node -v), $(cargo --version))${NC}"
 
-# 2. 安装前端依赖（默认使用国内加速源，避免官方源卡死）
+# 2. 安装前端依赖
 echo -e "\n${YELLOW}[2/4] 安装前端依赖...${NC}"
 NPM_REGISTRY="https://registry.npmmirror.com"
 if [ "${1:-}" = "--official-npm" ]; then
@@ -98,7 +111,7 @@ chmod +x "$TARGET_BIN"
 echo -e "\n${GREEN}=====================================================${NC}"
 echo -e "${GREEN}✓ 编译完成！${NC}"
 echo -e "${GREEN}可执行文件: ${TARGET_BIN}${NC}"
-echo -e "${GREEN}Web 资源目录: ${DIST_TARGET}${NC}"
+echo -e "${GREEN}Web 静态资源目录: ${DIST_TARGET}${NC}"
 echo -e "${GREEN}=====================================================${NC}"
 echo -e "\n${CYAN}启动方法:${NC}"
 echo -e "  cd \"$RELEASE_DIR\""

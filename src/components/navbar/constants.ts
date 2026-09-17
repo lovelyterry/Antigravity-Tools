@@ -1,4 +1,6 @@
-import type { LucideIcon } from 'lucide-react';
+import type { ComponentType } from 'react';
+
+export type LucideIcon = ComponentType<any>;
 
 // 类型定义
 export interface NavItem {

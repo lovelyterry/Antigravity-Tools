@@ -5,7 +5,6 @@ use futures::{Stream, StreamExt};
 use rand::Rng;
 use serde_json::{json, Value};
 use std::pin::Pin;
-use tracing::debug;
 use uuid::Uuid;
 
 /// 保存 thoughtSignature 到会话缓存
@@ -450,7 +449,7 @@ where
                                                     if let Some(parts) = candidate.get("content").and_then(|c| c.get("parts")).and_then(|p| p.as_array()) {
                                                         for part in parts {
                                                             thinking_acc.ingest_part(part);
-                                                            let is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false);
+                                                            let _is_thought = part.get("thought").and_then(|v| v.as_bool()).unwrap_or(false);
                                                             if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
                                                                 let clean_text = text.replace("<think>\n", "").replace("<think>", "").replace("\n</think>", "").replace("</think>", "");
                                                                 content_out.push_str(&clean_text);

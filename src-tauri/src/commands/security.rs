@@ -1,6 +1,5 @@
 use crate::modules::security_db;
 use serde::{Deserialize, Serialize};
-use tauri::State;
 
 // ==================== 请求/响应结构 ====================
 
@@ -45,7 +44,6 @@ pub struct IpStatsResponse {
 // ==================== IP 访问日志命令 ====================
 
 /// 获取 IP 访问日志列表
-#[tauri::command]
 pub async fn get_ip_access_logs(query: IpAccessLogQuery) -> Result<IpAccessLogResponse, String> {
     let offset = (query.page.max(1) - 1) * query.page_size;
 
@@ -63,7 +61,6 @@ pub async fn get_ip_access_logs(query: IpAccessLogQuery) -> Result<IpAccessLogRe
 }
 
 /// 获取 IP 统计信息
-#[tauri::command]
 pub async fn get_ip_stats() -> Result<IpStatsResponse, String> {
     let stats = security_db::get_ip_stats()?;
     let top_ips = security_db::get_top_ips(10, 24)?; // Top 10 IPs in last 24 hours
@@ -77,7 +74,6 @@ pub async fn get_ip_stats() -> Result<IpStatsResponse, String> {
 }
 
 /// 清空 IP 访问日志
-#[tauri::command]
 pub async fn clear_ip_access_logs() -> Result<(), String> {
     security_db::clear_ip_access_logs()
 }
@@ -85,13 +81,11 @@ pub async fn clear_ip_access_logs() -> Result<(), String> {
 // ==================== IP 黑名单命令 ====================
 
 /// 获取 IP 黑名单列表
-#[tauri::command]
 pub async fn get_ip_blacklist() -> Result<Vec<security_db::IpBlacklistEntry>, String> {
     security_db::get_blacklist()
 }
 
 /// 添加 IP 到黑名单
-#[tauri::command]
 pub async fn add_ip_to_blacklist(request: AddBlacklistRequest) -> Result<(), String> {
     // 验证 IP 格式
     if !is_valid_ip_pattern(&request.ip_pattern) {
@@ -111,7 +105,6 @@ pub async fn add_ip_to_blacklist(request: AddBlacklistRequest) -> Result<(), Str
 }
 
 /// 从黑名单移除 IP
-#[tauri::command]
 pub async fn remove_ip_from_blacklist(ip_pattern: String) -> Result<(), String> {
     // 先获取黑名单列表，找到对应的id
     let entries = security_db::get_blacklist()?;
@@ -125,7 +118,6 @@ pub async fn remove_ip_from_blacklist(ip_pattern: String) -> Result<(), String> 
 }
 
 /// 清空黑名单
-#[tauri::command]
 pub async fn clear_ip_blacklist() -> Result<(), String> {
     // 获取所有黑名单条目并逐个删除
     let entries = security_db::get_blacklist()?;
@@ -136,7 +128,6 @@ pub async fn clear_ip_blacklist() -> Result<(), String> {
 }
 
 /// 检查 IP 是否在黑名单中
-#[tauri::command]
 pub async fn check_ip_in_blacklist(ip: String) -> Result<bool, String> {
     security_db::is_ip_in_blacklist(&ip)
 }
@@ -144,13 +135,11 @@ pub async fn check_ip_in_blacklist(ip: String) -> Result<bool, String> {
 // ==================== IP 白名单命令 ====================
 
 /// 获取 IP 白名单列表
-#[tauri::command]
 pub async fn get_ip_whitelist() -> Result<Vec<security_db::IpWhitelistEntry>, String> {
     security_db::get_whitelist()
 }
 
 /// 添加 IP 到白名单
-#[tauri::command]
 pub async fn add_ip_to_whitelist(request: AddWhitelistRequest) -> Result<(), String> {
     // 验证 IP 格式
     if !is_valid_ip_pattern(&request.ip_pattern) {
@@ -165,7 +154,6 @@ pub async fn add_ip_to_whitelist(request: AddWhitelistRequest) -> Result<(), Str
 }
 
 /// 从白名单移除 IP
-#[tauri::command]
 pub async fn remove_ip_from_whitelist(ip_pattern: String) -> Result<(), String> {
     // 先获取白名单列表，找到对应的id
     let entries = security_db::get_whitelist()?;
@@ -179,7 +167,6 @@ pub async fn remove_ip_from_whitelist(ip_pattern: String) -> Result<(), String> 
 }
 
 /// 清空白名单
-#[tauri::command]
 pub async fn clear_ip_whitelist() -> Result<(), String> {
     // 获取所有白名单条目并逐个删除
     let entries = security_db::get_whitelist()?;
@@ -190,7 +177,6 @@ pub async fn clear_ip_whitelist() -> Result<(), String> {
 }
 
 /// 检查 IP 是否在白名单中
-#[tauri::command]
 pub async fn check_ip_in_whitelist(ip: String) -> Result<bool, String> {
     security_db::is_ip_in_whitelist(&ip)
 }
@@ -198,9 +184,8 @@ pub async fn check_ip_in_whitelist(ip: String) -> Result<bool, String> {
 // ==================== 安全配置命令 ====================
 
 /// 获取安全监控配置
-#[tauri::command]
 pub async fn get_security_config(
-    app_state: State<'_, crate::commands::proxy::ProxyServiceState>,
+    app_state: &crate::commands::proxy::ProxyServiceState,
 ) -> Result<crate::proxy::config::SecurityMonitorConfig, String> {
     // 1. 尝试从运行中的实例获取 (内存中可能由最新的配置)
     let instance_lock = app_state.instance.read().await;
@@ -215,10 +200,9 @@ pub async fn get_security_config(
 }
 
 /// 更新安全监控配置
-#[tauri::command]
 pub async fn update_security_config(
     config: crate::proxy::config::SecurityMonitorConfig,
-    app_state: State<'_, crate::commands::proxy::ProxyServiceState>,
+    app_state: &crate::commands::proxy::ProxyServiceState,
 ) -> Result<(), String> {
     // 1. 同步保存到配置文件
     let mut app_config = crate::modules::config::load_app_config()
@@ -247,7 +231,6 @@ pub async fn update_security_config(
 // ==================== 统计分析命令 ====================
 
 /// 获取 IP Token 消耗统计
-#[tauri::command]
 pub async fn get_ip_token_stats(
     limit: Option<usize>,
     hours: Option<i64>,

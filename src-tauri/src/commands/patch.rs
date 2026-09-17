@@ -1,8 +1,6 @@
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
-#[tauri::command]
 pub async fn patch_agy_binary(file_path: String) -> Result<String, String> {
     let mut actual_path = file_path.clone();
     if actual_path.ends_with(".app") || actual_path.ends_with(".app/") {
@@ -22,7 +20,6 @@ pub async fn patch_agy_binary(file_path: String) -> Result<String, String> {
     let n = data.len();
     let mut patch_offset = None;
     let mut new_inst_bytes = None;
-    let mut is_pe_x64 = false;
 
     // 1. Scan for x86_64 PE (Windows/Linux) pattern
     // Pattern: cmpb $0x0, (%r12) -> 41 80 3c 24 00
@@ -44,7 +41,6 @@ pub async fn patch_agy_binary(file_path: String) -> Result<String, String> {
                     patch_offset = Some(i + 5); // Points to the jne instruction: 0f 85 ...
                                                 // Rewrite jne to 6 NOP bytes (0x90) so it falls through unconditionally
                     new_inst_bytes = Some(vec![0x90; 6]);
-                    is_pe_x64 = true;
                     break;
                 }
             }

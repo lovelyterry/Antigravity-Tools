@@ -1,6 +1,4 @@
 use crate::models::Account;
-use crate::modules::{db, device, process, version};
-use std::fs;
 use std::process::Command;
 
 pub trait SystemIntegration: Send + Sync {
@@ -18,169 +16,7 @@ pub trait SystemIntegration: Send + Sync {
     fn show_notification(&self, title: &str, body: &str);
 }
 
-/// 桌面版实现：包含完整的进程控制 and UI 同步
-pub struct DesktopIntegration {
-    pub app_handle: tauri::AppHandle,
-}
-
-impl SystemIntegration for DesktopIntegration {
-    async fn on_account_switch(
-        &self,
-        account: &crate::models::Account,
-        target_ide: Option<&str>,
-    ) -> Result<(), String> {
-        crate::modules::logger::log_info(&format!(
-            "[Desktop] Executing system switch for: {} (target_ide: {:?})",
-            account.email, target_ide
-        ));
-
-        if target_ide == Some("agy") {
-            write_to_system_keyring(account)?;
-
-            if let Ok(storage_path) = device::get_storage_path(target_ide) {
-                if let Some(ref profile) = account.device_profile {
-                    let _ = device::write_profile(&storage_path, profile);
-                }
-            }
-
-            let is_running = process::is_process_running_by_name("agy");
-            let msg = if is_running {
-                format!(
-                    "Account {} activated. Agy is running, token will be picked up automatically.",
-                    account.email
-                )
-            } else {
-                format!(
-                    "Account {} activated. Token is ready for your next CLI command.",
-                    account.email
-                )
-            };
-            self.show_notification("Antigravity CLI", &msg);
-            self.update_tray();
-
-            return Ok(());
-        }
-
-        // 1. 先关闭外部正在运行的进程（无论是原生还是IDE，先安全关闭，避免文件或凭据冲突）
-        if process::is_antigravity_running(target_ide) {
-            process::close_antigravity(20, target_ide)?;
-        }
-
-        // 2. 智能决策：是否使用最新的系统 Keychain 凭据管理器方式存储 Token
-        let mut is_ide = target_ide == Some("ide");
-
-        // Auto-detect IDE: if the located executable is the IDE, treat as IDE mode
-        if !is_ide {
-            if let Some(exe_path) = process::get_antigravity_executable_path(target_ide) {
-                let path_lower = exe_path.to_string_lossy().to_lowercase();
-                if path_lower.contains("antigravity ide") || path_lower.contains("antigravity-ide")
-                {
-                    is_ide = true;
-                    crate::modules::logger::log_info(
-                        "[Desktop] Auto-detected Antigravity IDE executable, using IDE account switch logic.",
-                    );
-                }
-            }
-        }
-
-        let mut use_keyring = false;
-
-        if !is_ide {
-            // 经典原生版：自动探测版本号
-            match version::get_antigravity_version(target_ide) {
-                Ok(ver) => {
-                    // 如果版本号 >= 2.0.0
-                    if version::compare_version(&ver.short_version, "2.0.0")
-                        != std::cmp::Ordering::Less
-                    {
-                        use_keyring = true;
-                        crate::modules::logger::log_info(&format!(
-                            "[Desktop] Detected Antigravity version {} >= 2.0.0, using system Keyring.",
-                            ver.short_version
-                        ));
-                    } else {
-                        crate::modules::logger::log_info(&format!(
-                            "[Desktop] Detected Antigravity version {} < 2.0.0, falling back to legacy SQLite injection.",
-                            ver.short_version
-                        ));
-                    }
-                }
-                Err(e) => {
-                    // 如果探测失败，为防止对最新版由于没有 storage.json 造成报错阻断，默认作为新凭据注入
-                    use_keyring = true;
-                    crate::modules::logger::log_warn(&format!(
-                        "[Desktop] Failed to detect Antigravity version ({}), defaulting to system Keyring for robustness.",
-                        e
-                    ));
-                }
-            }
-        }
-
-        if use_keyring {
-            // ================== 最新版 Antigravity 原生应用逻辑 (>= 2.0.0) ==================
-            // 2.1 写入系统 Keychain/Keyring
-            write_to_system_keyring(account)?;
-
-            // 2.2 原生应用可能没有 storage.json，但如果有的话，我们也可以尝试安全地写入设备 Profile，以兼容指纹信息
-            if let Ok(storage_path) = device::get_storage_path(target_ide) {
-                if let Some(ref profile) = account.device_profile {
-                    let _ = device::write_profile(&storage_path, profile);
-                }
-            }
-        } else {
-            // ================== 原有 Antigravity 旧版或定制 IDE 逻辑 (< 2.0.0) ==================
-            // 2.1 获取存储路径
-            let storage_path = device::get_storage_path(target_ide)?;
-
-            // 2.2 写入设备 Profile
-            if let Some(ref profile) = account.device_profile {
-                device::write_profile(&storage_path, profile)?;
-            }
-
-            // 2.3 数据库处理与 Token 注入
-            let db_path = db::get_db_path(target_ide)?;
-            if db_path.exists() {
-                let backup_path = db_path.with_extension("vscdb.backup");
-                let _ = fs::copy(&db_path, &backup_path);
-            }
-
-            db::inject_token(
-                &db_path,
-                &account.token.access_token,
-                &account.token.refresh_token,
-                account.token.expiry_timestamp,
-                &account.email,
-                account.token.is_gcp_tos,
-                account.token.project_id.as_deref(),
-                account.token.id_token.as_deref(),
-                account.token.oauth_client_key.as_deref(),
-                target_ide,
-            )?;
-
-            // 2.4 同步 Service Machine ID 到数据库
-            if let Some(ref profile) = account.device_profile {
-                let _ = db::write_service_machine_id(&db_path, &profile.mac_machine_id);
-            }
-        }
-
-        // 3. 重启外部进程
-        process::start_antigravity(target_ide)?;
-
-        // 4. 更新托盘
-        let _ = crate::modules::tray::update_tray_menus(&self.app_handle);
-
-        Ok(())
-    }
-
-    fn update_tray(&self) {
-        let _ = crate::modules::tray::update_tray_menus(&self.app_handle);
-    }
-
-    fn show_notification(&self, title: &str, body: &str) {
-        // 使用 tauri-plugin-dialog 或原生通知（此处简化）
-        crate::modules::logger::log_info(&format!("[Notification] {}: {}", title, body));
-    }
-}
+// Headless standalone integration without desktop UI
 
 /// 辅助方法：向宿主操作系统的 Keychain/Credentials Manager 写入 Token
 fn write_to_system_keyring(account: &crate::models::Account) -> Result<(), String> {
@@ -703,10 +539,10 @@ impl SystemIntegration for HeadlessIntegration {
     }
 }
 
-/// 系统集成管理器：替代 Arc<dyn SystemIntegration> 以解决 async trait 的 dyn 兼容性问题
-#[derive(Clone)]
+/// 系统集成管理器：Headless 独立模式
+#[derive(Clone, Copy, Default)]
 pub enum SystemManager {
-    Desktop(tauri::AppHandle),
+    #[default]
     Headless,
 }
 
@@ -716,42 +552,15 @@ impl SystemManager {
         account: &Account,
         target_ide: Option<&str>,
     ) -> Result<(), String> {
-        match self {
-            SystemManager::Desktop(handle) => {
-                let integration = DesktopIntegration {
-                    app_handle: handle.clone(),
-                };
-                integration.on_account_switch(account, target_ide).await
-            }
-            SystemManager::Headless => {
-                let integration = HeadlessIntegration;
-                integration.on_account_switch(account, target_ide).await
-            }
-        }
+        let integration = HeadlessIntegration;
+        integration.on_account_switch(account, target_ide).await
     }
 
-    pub fn update_tray(&self) {
-        if let SystemManager::Desktop(handle) = self {
-            let integration = DesktopIntegration {
-                app_handle: handle.clone(),
-            };
-            integration.update_tray();
-        }
-    }
+    pub fn update_tray(&self) {}
 
     pub fn show_notification(&self, title: &str, body: &str) {
-        match self {
-            SystemManager::Desktop(handle) => {
-                let integration = DesktopIntegration {
-                    app_handle: handle.clone(),
-                };
-                integration.show_notification(title, body);
-            }
-            SystemManager::Headless => {
-                let integration = HeadlessIntegration;
-                integration.show_notification(title, body);
-            }
-        }
+        let integration = HeadlessIntegration;
+        integration.show_notification(title, body);
     }
 }
 
@@ -761,18 +570,7 @@ impl SystemIntegration for SystemManager {
         account: &crate::models::Account,
         target_ide: Option<&str>,
     ) -> Result<(), String> {
-        match self {
-            SystemManager::Desktop(handle) => {
-                let integration = DesktopIntegration {
-                    app_handle: handle.clone(),
-                };
-                integration.on_account_switch(account, target_ide).await
-            }
-            SystemManager::Headless => {
-                let integration = HeadlessIntegration;
-                integration.on_account_switch(account, target_ide).await
-            }
-        }
+        self.on_account_switch(account, target_ide).await
     }
 
     fn update_tray(&self) {

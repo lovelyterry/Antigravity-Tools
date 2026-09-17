@@ -66,10 +66,9 @@ fn parse_reset_time_ts(s: &str) -> Option<i64> {
 
 /// Start smart weekly scheduler
 pub fn start_scheduler(
-    app_handle: Option<tauri::AppHandle>,
     proxy_state: crate::commands::proxy::ProxyServiceState,
 ) {
-    tauri::async_runtime::spawn(async move {
+    tokio::spawn(async move {
         logger::log_info("[Scheduler] Weekly Reset Warmup Scheduler started. Monitoring 7-day quota windows...");
 
         // Scan every 5 minutes (300s) to check for accounts reaching weekly reset time
@@ -210,7 +209,6 @@ pub fn start_scheduler(
                     tasks_to_run.len()
                 ));
 
-                let handle_for_warmup = app_handle.clone();
                 let state_for_warmup = proxy_state.clone();
 
                 tokio::spawn(async move {
@@ -231,10 +229,14 @@ pub fn start_scheduler(
                         .await;
 
                         if success {
-                            let now = Utc::now().timestamp();
-                            record_warmup_history(&history_key, now);
                             logger::log_info(&format!(
-                                "[WeeklyWarmup] ✅ Successfully started weekly timer for {} @ {}",
+                                "[WeeklyWarmup] ✅ Successfully warmed up {} for {}",
+                                model, email
+                            ));
+                            record_warmup_history(&history_key, chrono::Utc::now().timestamp());
+                        } else {
+                            logger::log_warn(&format!(
+                                "[WeeklyWarmup] ❌ Warmup failed for {} on {}",
                                 model, email
                             ));
                         }
@@ -245,7 +247,6 @@ pub fn start_scheduler(
                     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                     let _ = crate::commands::refresh_all_quotas_internal(
                         &state_for_warmup,
-                        handle_for_warmup,
                     )
                     .await;
                 });

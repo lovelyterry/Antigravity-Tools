@@ -1,6 +1,6 @@
 // Gemini v1internal 包装/解包
 use serde_json::{json, Value};
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// 包装请求体为 v1internal 格式
 pub fn wrap_request_v2(
@@ -26,7 +26,7 @@ pub fn wrap_request_v2(
     };
 
     // [ADDED v4.1.24] 计算 message_count 供 requestId 使用
-    let message_count = body
+    let _message_count = body
         .get("contents")
         .and_then(|c| c.as_array())
         .map(|a| a.len())
@@ -243,7 +243,7 @@ pub fn wrap_request_v2(
         .get_mut("contents")
         .and_then(|c| c.as_array_mut())
     {
-        for (i, content) in contents.iter_mut().enumerate() {
+        for (_i, content) in contents.iter_mut().enumerate() {
             let mut name_counters: std::collections::HashMap<String, usize> =
                 std::collections::HashMap::new();
 
@@ -822,7 +822,7 @@ pub fn wrap_request_v2(
         ));
     }
 
-    let sid = session_id.unwrap_or("default");
+    let _sid = session_id.unwrap_or("default");
 
     // [NEW] 1. 深度对齐 requestId 格式 (官方格式: agent/{timestamp_ms}/{random_hex_8bytes})
     // 每次请求生成完全唯一的 ID，避免重试时的幂等性冲突导致 Google 返回旧缓存

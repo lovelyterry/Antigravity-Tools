@@ -26,8 +26,9 @@ pub mod version;
 
 use crate::models;
 
-// Re-export commonly used functions to the top level of the modules namespace for easy external calling
+#[allow(unused_imports)]
 pub use account::*;
+#[allow(unused_imports)]
 pub use config::*;
 #[allow(unused_imports)]
 pub use logger::*;

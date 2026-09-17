@@ -507,8 +507,7 @@ pub async fn start_server(
 
 /// Start HTTP API server in background (non-blocking)
 pub fn spawn_server(port: u16, integration: crate::modules::integration::SystemManager) {
-    // Use tauri::async_runtime::spawn to ensure running within Tauri's runtime
-    tauri::async_runtime::spawn(async move {
+    tokio::spawn(async move {
         if let Err(e) = start_server(port, integration).await {
             logger::log_error(&format!("[HTTP API] Failed to start server: {}", e));
         }

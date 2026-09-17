@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex, OnceLock};
-use tokio::sync::{oneshot, watch, RwLock};
+use tokio::sync::{watch, RwLock};
 use tracing::{debug, error};
 
 // [FIX] 全局待重新加载账号队列

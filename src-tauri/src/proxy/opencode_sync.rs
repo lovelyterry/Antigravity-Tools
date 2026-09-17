@@ -3044,7 +3044,6 @@ pub fn read_opencode_config_content(file_name: Option<String>) -> Result<String,
     fs::read_to_string(&target_path).map_err(|e| format!("Failed to read config: {}", e))
 }
 
-#[tauri::command]
 pub async fn get_opencode_sync_status(proxy_url: String) -> Result<OpencodeStatus, String> {
     tokio::task::spawn_blocking(move || {
         let (installed, version) = check_opencode_installed();
@@ -3068,7 +3067,6 @@ pub async fn get_opencode_sync_status(proxy_url: String) -> Result<OpencodeStatu
     .unwrap_or_else(|_| Err("Failed to execute check".to_string()))
 }
 
-#[tauri::command]
 pub fn get_canonical_families() -> Vec<CanonicalFamilyDto> {
     GEMINI_FAMILIES
         .iter()
@@ -3094,7 +3092,6 @@ pub fn get_canonical_families() -> Vec<CanonicalFamilyDto> {
         .collect()
 }
 
-#[tauri::command]
 pub async fn execute_opencode_sync(
     proxy_url: String,
     api_key: String,
@@ -3108,7 +3105,6 @@ pub async fn execute_opencode_sync(
     .unwrap_or_else(|_| Err("Failed to execute sync".to_string()))
 }
 
-#[tauri::command]
 pub async fn execute_opencode_restore() -> Result<(), String> {
     tokio::task::spawn_blocking(move || restore_opencode_config())
         .await
@@ -3121,7 +3117,6 @@ pub struct GetOpencodeConfigRequest {
     pub file_name: Option<String>,
 }
 
-#[tauri::command]
 pub async fn get_opencode_config_content(
     request: GetOpencodeConfigRequest,
 ) -> Result<String, String> {
@@ -3254,7 +3249,6 @@ fn cleanup_legacy_provider(provider: &mut Value, proxy_url: &str) {
     }
 }
 
-#[tauri::command]
 pub async fn execute_opencode_clear(
     proxy_url: Option<String>,
     clear_legacy: Option<bool>,

@@ -1013,7 +1013,7 @@ fn build_contents(
     is_thinking_enabled: bool,
     session_id: &str,
     msg_index: usize,
-    allow_dummy_thought: bool,
+    _allow_dummy_thought: bool,
     is_retry: bool,
     tool_id_to_name: &mut HashMap<String, String>,
     tool_name_to_schema: &HashMap<String, Value>,

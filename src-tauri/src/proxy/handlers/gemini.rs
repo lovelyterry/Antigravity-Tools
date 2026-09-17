@@ -15,7 +15,7 @@ use crate::proxy::handlers::common::{
     apply_retry_strategy, build_token_error_headers, next_rotation_attempt, should_rotate_account,
     FailureStatusTracker, RequestRetryState, RetryStrategy,
 };
-use crate::proxy::mappers::gemini::{unwrap_response, wrap_request, wrap_request_v2};
+use crate::proxy::mappers::gemini::{unwrap_response, wrap_request_v2};
 use crate::proxy::server::AppState;
 use crate::proxy::session_manager::SessionManager;
 use crate::proxy::upstream::client::mask_email;
@@ -105,7 +105,9 @@ pub async fn handle_generate(
     // [Stage Timing] 阶段耗时度量变量 (毫秒)
     let clean_micros = clean_start.elapsed().as_micros() as u64;
     let clean_ms: f64 = clean_micros as f64 / 1000.0;
+    #[allow(unused_assignments)]
     let mut norm_ms: f64 = 0.0;
+    #[allow(unused_assignments)]
     let mut think_fill_ms: f64 = 0.0;
     let mut ttft_ms: f64 = 0.0;
 

@@ -755,9 +755,8 @@ pub fn sync_config(
     Ok(())
 }
 
-// Tauri Commands
+// CLI Commands
 
-#[tauri::command]
 pub async fn get_cli_sync_status(app_type: CliApp, proxy_url: String) -> Result<CliStatus, String> {
     tokio::task::spawn_blocking(move || {
         let (installed, version) = check_cli_installed(&app_type);
@@ -784,7 +783,6 @@ pub async fn get_cli_sync_status(app_type: CliApp, proxy_url: String) -> Result<
     .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
-#[tauri::command]
 pub async fn execute_cli_sync(
     app_type: CliApp,
     proxy_url: String,
@@ -798,7 +796,6 @@ pub async fn execute_cli_sync(
     .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
-#[tauri::command]
 pub async fn execute_cli_restore(app_type: CliApp) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let files = app_type.config_files();
@@ -832,7 +829,6 @@ pub async fn execute_cli_restore(app_type: CliApp) -> Result<(), String> {
     .unwrap_or_else(|_| Err("Task panicked".to_string()))
 }
 
-#[tauri::command]
 pub async fn get_cli_config_content(
     app_type: CliApp,
     file_name: Option<String>,

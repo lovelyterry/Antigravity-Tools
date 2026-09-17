@@ -6,7 +6,6 @@ use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use tauri::Emitter;
 use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::Context;
@@ -20,9 +19,6 @@ static LOG_BRIDGE_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Atomic counter for unique log IDs
 static LOG_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Global app handle for emitting events (set once during setup)
-static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 /// Global log buffer for storing logs before UI connects
 static LOG_BUFFER: OnceLock<Arc<RwLock<VecDeque<LogEntry>>>> = OnceLock::new();
@@ -43,24 +39,14 @@ pub struct LogEntry {
     pub fields: std::collections::HashMap<String, String>,
 }
 
-/// Initialize the log bridge with app handle (call from setup)
-pub fn init_log_bridge(app_handle: tauri::AppHandle) {
-    let _ = APP_HANDLE.set(app_handle);
-    tracing::debug!("[LogBridge] Initialized with app handle");
+/// Initialize the log bridge
+pub fn init_log_bridge() {
+    tracing::debug!("[LogBridge] Initialized");
 }
 
-/// Enable log bridging and emit buffered logs
+/// Enable log bridging
 pub fn enable_log_bridge() {
     LOG_BRIDGE_ENABLED.store(true, Ordering::SeqCst);
-
-    // Emit all buffered logs to frontend
-    if let Some(handle) = APP_HANDLE.get() {
-        let buffer = get_log_buffer().read();
-        for entry in buffer.iter() {
-            let _ = handle.emit("log-event", entry.clone());
-        }
-    }
-
     tracing::info!("[LogBridge] Debug console enabled");
 }
 
@@ -85,13 +71,8 @@ pub fn clear_log_buffer() {
     get_log_buffer().write().clear();
 }
 
-/// Emit accounts://refreshed event to notify the frontend of account state changes
-/// This is used by background tasks (e.g. warmup 403 handling) that cannot access AppHandle directly.
+/// Emit accounts refreshed notification
 pub fn emit_accounts_refreshed() {
-    if let Some(handle) = APP_HANDLE.get() {
-        let _ = handle.emit("accounts://refreshed", ());
-        tracing::debug!("[LogBridge] Emitted accounts://refreshed event to frontend");
-    }
 }
 
 /// Visitor to extract fields from tracing events
@@ -209,39 +190,25 @@ where
             }
             buffer.push_back(entry.clone());
         }
-
-        // Emit to frontend
-        if let Some(handle) = APP_HANDLE.get() {
-            let _ = handle.emit("log-event", entry);
-        }
     }
 }
 
-// ============================================================================
-// Tauri Commands
-// ============================================================================
-
-#[tauri::command]
 pub fn enable_debug_console() {
     enable_log_bridge();
 }
 
-#[tauri::command]
 pub fn disable_debug_console() {
     disable_log_bridge();
 }
 
-#[tauri::command]
 pub fn is_debug_console_enabled() -> bool {
     is_log_bridge_enabled()
 }
 
-#[tauri::command]
 pub fn get_debug_console_logs() -> Vec<LogEntry> {
     get_buffered_logs()
 }
 
-#[tauri::command]
 pub fn clear_debug_console_logs() {
     clear_log_buffer();
 }

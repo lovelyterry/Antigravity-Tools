@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::Emitter;
 use tokio::sync::{RwLock, Semaphore};
 
 // Admission happens before spawn_blocking, so queued tasks cannot retain unlimited bodies.
@@ -86,7 +85,6 @@ pub(crate) mod prompt_log_tests {
             stats: RwLock::new(ProxyStats::default()),
             max_logs: 2,
             enabled: Arc::new(AtomicBool::new(true)),
-            app_handle: None,
         };
         let log = sample_log("detail", 4096);
         let response = log.response_body.clone();
@@ -230,11 +228,10 @@ pub struct ProxyMonitor {
     pub stats: RwLock<ProxyStats>,
     pub max_logs: usize,
     pub enabled: Arc<AtomicBool>,
-    app_handle: Option<tauri::AppHandle>,
 }
 
 impl ProxyMonitor {
-    pub fn new(max_logs: usize, app_handle: Option<tauri::AppHandle>) -> Self {
+    pub fn new(max_logs: usize) -> Self {
         // Initialize DB
         if let Err(e) = crate::modules::proxy_db::init_db() {
             tracing::error!("Failed to initialize proxy DB: {}", e);
@@ -328,7 +325,6 @@ impl ProxyMonitor {
             stats: RwLock::new(ProxyStats::default()),
             max_logs,
             enabled: Arc::new(AtomicBool::new(false)), // Default to disabled
-            app_handle,
         }
     }
 
@@ -379,10 +375,6 @@ impl ProxyMonitor {
                 logs.pop_back();
             }
             logs.push_front(summary.clone());
-        }
-
-        if let Some(app) = &self.app_handle {
-            let _ = app.emit("proxy://request", &summary);
         }
 
         let Ok(permit) = LOG_WRITERS.try_acquire() else {

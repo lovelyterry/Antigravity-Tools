@@ -1851,7 +1851,9 @@ pub async fn handle_chat_completions(
     }
 
     let clean_ms = clean_start.elapsed().as_micros() as f64 / 1000.0;
+    #[allow(unused_assignments)]
     let mut norm_ms = 0.0f64;
+    #[allow(unused_assignments)]
     let mut think_fill_ms = 0.0f64;
     let mut ttft_ms = 0.0f64;
 
@@ -3665,7 +3667,6 @@ pub async fn handle_completions(
     let token_manager = state.token_manager.clone();
 
     let mut compression_applied = false;
-    let mut is_purified = false;
 
     if compression_level == "high" {
         let context_limit = if mapped_model.contains("flash") {
@@ -3736,7 +3737,6 @@ pub async fn handle_completions(
                 &mut openai_req.messages,
                 4,
             ) {
-                is_purified = true;
                 compression_applied = true;
 
                 let new_raw = crate::proxy::mappers::context_manager::ContextManager::estimate_openai_token_usage(&openai_req);
@@ -3778,7 +3778,6 @@ pub async fn handle_completions(
                     );
 
                     openai_req = forked_req;
-                    is_purified = false;
 
                     let new_raw = crate::proxy::mappers::context_manager::ContextManager::estimate_openai_token_usage(&openai_req);
                     let new_usage = calibrator.calibrate(new_raw);
@@ -3838,7 +3837,9 @@ pub async fn handle_completions(
     let mut used_attempts = 0;
 
     let clean_ms = clean_start.elapsed().as_micros() as f64 / 1000.0;
+    #[allow(unused_assignments)]
     let mut norm_ms = 0.0f64;
+    #[allow(unused_assignments)]
     let mut think_fill_ms = 0.0f64;
     let mut ttft_ms = 0.0f64;
 
@@ -5791,7 +5792,7 @@ pub async fn handle_images_edits(
 // ==========================================
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use futures::{SinkExt, StreamExt};
+use futures::StreamExt;
 use uuid::Uuid;
 
 // ==========================================
@@ -6359,7 +6360,7 @@ fn dedupe_input_items_by_id(items: Vec<Value>) -> Vec<Value> {
         }
         let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
         let is_referenced = !call_id.is_empty() && referenced_call_ids.contains(call_id);
-        if let Some(&(existing_idx, existing_referenced)) = keep_map.get(item_id) {
+        if let Some(&(_existing_idx, existing_referenced)) = keep_map.get(item_id) {
             if is_referenced || !existing_referenced {
                 keep_map.insert(item_id.to_string(), (idx, is_referenced));
             }

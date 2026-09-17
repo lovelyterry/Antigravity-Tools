@@ -8,5 +8,6 @@ pub use account::{
     DeviceProfileVersion,
 };
 pub use config::{AppConfig, CircuitBreakerConfig, QuotaProtectionConfig};
+#[allow(unused_imports)]
 pub use quota::{QuotaBucket, QuotaData, QuotaGroup};
 pub use token::TokenData;

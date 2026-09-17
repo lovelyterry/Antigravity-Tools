@@ -352,7 +352,7 @@ pub fn transform_openai_request_with_session(
         || force_server_thinking;
 
     // [NEW] 检查历史消息是否兼容思维模型 (是否有 Assistant 消息缺失 reasoning_content)
-    let has_incompatible_assistant_history = request.messages.iter().any(|msg| {
+    let _has_incompatible_assistant_history = request.messages.iter().any(|msg| {
         msg.role == "assistant"
             && (msg.reasoning_content.is_none()
                 || msg
@@ -362,7 +362,7 @@ pub fn transform_openai_request_with_session(
     });
 
     // 检查历史中是否有工具调用
-    let has_tool_calls_in_history = request
+    let _has_tool_calls_in_history = request
         .messages
         .iter()
         .any(|msg| msg.role == "tool" || msg.role == "function" || msg.tool_calls.is_some());
@@ -371,7 +371,7 @@ pub fn transform_openai_request_with_session(
     // 1. 模型名包含 -thinking 时自动开启
     // 2. 用户在请求中显式设置 thinking.type = "enabled" 时开启
     // 3. 若为 Gemini < 3 模型，保底强制关闭 thinking
-    let mut actual_include_thinking = !is_under_v3
+    let actual_include_thinking = !is_under_v3
         && (is_thinking_model || user_enabled_thinking || force_server_thinking);
 
     // [REFACTORED] 使用 SignatureCache 获取 Session 级别的签名
@@ -699,18 +699,13 @@ pub fn transform_openai_request_with_session(
                     }
                     */
 
-                    let mut args_str = String::new();
-                    let mut func_name = String::new();
-
-                    if let Some(func) = &tc.function {
-                        args_str = func.arguments.clone();
-                        func_name = func.name.clone();
+                    let (func_name, mut args_str) = if let Some(func) = &tc.function {
+                        (func.name.clone(), func.arguments.clone())
                     } else if let Some(op) = &tc.operation {
-                        func_name = "apply_patch".to_string();
-                        args_str = serde_json::to_string(op).unwrap_or_else(|_| "{}".to_string());
+                        ("apply_patch".to_string(), serde_json::to_string(op).unwrap_or_else(|_| "{}".to_string()))
                     } else {
                         continue;
-                    }
+                    };
 
                     if !is_latest && args_str.len() > 1000 && !is_apply_patch_tool_name(&func_name)
                     {
@@ -1103,7 +1098,7 @@ pub fn transform_openai_request_with_session(
     crate::proxy::mappers::common_utils::deep_clean_undefined(&mut inner_request, 0);
 
     // 4. Handle Tools (Merged Cleaning)
-    let is_codex_style = request.model.contains("codex")
+    let _is_codex_style = request.model.contains("codex")
         || request.model.contains("realtime")
         || request.instructions.is_some()
         || request.input.is_some();

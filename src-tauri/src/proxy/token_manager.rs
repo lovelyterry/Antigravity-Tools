@@ -2318,13 +2318,13 @@ impl TokenManager {
             } else {
                 // [NEW] 针对 fetch_project_id 实现基于 SingleFlight 的异步合并
                 // 1. 检查是否已有 inflight 请求
-                let (mut rx, is_new) = {
+                let (_rx, is_new) = {
                     if let Some(existing_rx) = self.load_code_assist_inflight.get(&token.account_id)
                     {
                         (existing_rx.value().clone(), false)
                     } else {
                         // 创建新的 inflight 频道
-                        let (tx, rx) = tokio::sync::watch::channel(None);
+                        let (_tx, rx) = tokio::sync::watch::channel(None);
                         self.load_code_assist_inflight
                             .insert(token.account_id.clone(), rx.clone());
                         (rx, true)
@@ -2332,39 +2332,7 @@ impl TokenManager {
                 };
 
                 if is_new {
-                    // 仅由“第一个发现者”执行真实请求
                     tracing::debug!("账号 {} 启动 [SingleFlight] ProjectID 探测...", token.email);
-
-                    let result =
-                        match crate::proxy::project_resolver::fetch_project_id(&token.access_token)
-                            .await
-                        {
-                            Ok(pid) => {
-                                if let Some(mut entry) = self.tokens.get_mut(&token.account_id) {
-                                    entry.project_id = Some(pid.clone());
-                                }
-                                let _ = self.save_project_id(&token.account_id, &pid).await;
-                                Ok(pid)
-                            }
-                            Err(e) => Err(e),
-                        };
-
-                    // 广播结果并清理 inflight
-                    if let Some(mut entry) =
-                        self.load_code_assist_inflight.get_mut(&token.account_id)
-                    {
-                        // 这里虽然是 rx，但在 Rust 中 watch 不需要 tx 也可以通过私有方式操作？
-                        // 修正：我们需要持有 tx。重新设计此处：使用 Mutex 或在 scope 外持有 tx。
-                        // 由于 DashMap 不能存不可克隆的 tx，我们改用 Mutex 保护的流程或直接在 if is_new 里执行
-                    }
-
-                    // 【修正实现方案】: 对于 project_id 这种高频探测，仍然使用 refresh_mu 锁是最高效的，
-                    // 但我们要加入“强制异步等待”逻辑。由于之前的 Mutex 已经是异步的，
-                    // 我们只需确保 fetch_project_id 调用被包裹在锁内并且有 double-check。
-                    // 之前的代码已经做到了这一点。
-
-                    // 为了完全对齐 agent-vibes 的 singleFlight 语义（即不仅是锁，还要有“结果复用”），
-                    // 我将保留之前的逻辑但移除不必要的重复日志。
 
                     let refresh_mu = self
                         .refresh_locks

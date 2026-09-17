@@ -18,7 +18,7 @@ use crate::proxy::mappers::claude::{
     clean_cache_control_from_messages, close_tool_loop_for_thinking, create_claude_sse_stream,
     filter_invalid_thinking_blocks_with_family, merge_consecutive_messages,
     models::{Message, MessageContent},
-    transform_claude_request_in, transform_response, ClaudeRequest,
+    transform_response, ClaudeRequest,
 };
 use crate::proxy::mappers::context_manager::ContextManager;
 use crate::proxy::mappers::estimation_calibrator::get_calibrator;
@@ -839,9 +839,11 @@ pub async fn handle_messages(
     let mut force_rotate = false;
 
     // [Stage Timing] 阶段耗时度量变量 (毫秒，保留微秒级浮点精度)
-    let mut clean_micros = clean_start.elapsed().as_micros() as u64;
-    let mut clean_ms: f64 = clean_micros as f64 / 1000.0;
+    let clean_micros = clean_start.elapsed().as_micros() as u64;
+    let clean_ms: f64 = clean_micros as f64 / 1000.0;
+    #[allow(unused_assignments)]
     let mut norm_ms: f64 = 0.0;
+    #[allow(unused_assignments)]
     let mut think_fill_ms: f64 = 0.0;
     let mut ttft_ms: f64 = 0.0;
 
