@@ -5,19 +5,13 @@ This document provides a detailed technical overview of the Proxy Monitor featur
 ## 1. Interface Overview
 
 ### 1.1 Entrance (API Proxy Page)
-When the proxy service is running, an entry button to the monitor dashboard appears.
-> ![Entrance Screenshot](images/monitor/entrance.png)
-> *Note: Button appears next to the service status indicator.*
+When the proxy service is running, an entry button to the monitor dashboard appears next to the service status indicator.
 
 ### 1.2 Monitor Dashboard
-A full-screen dashboard showing real-time traffic, including quick filters and recording controls.
-> ![Dashboard Screenshot](images/monitor/dashboard.png)
-> *Note: Displays real-time request logs with status, model, and token usage.*
+A full-screen dashboard showing real-time traffic, including quick filters and recording controls. Displays real-time request logs with status, model, and token usage.
 
 ### 1.3 Request Details (Detail Modal)
-Clicking on any record opens a high-contrast modal showing the full request and response payloads.
-> ![Details Screenshot](images/monitor/details.png)
-> *Note: Formatted JSON view for deep analysis.*
+Clicking on any record opens a modal showing formatted JSON views of the full request and response payloads for deep analysis.
 
 ---
 
