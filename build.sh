@@ -27,20 +27,9 @@ check_tool() {
     fi
 }
 
-# 判断是否需要编译前端
-NEED_BUILD_FRONTEND=0
-if [ "${1:-}" = "--force-frontend" ] || [ ! -d "dist" ] || [ ! -f "dist/index.html" ]; then
-    NEED_BUILD_FRONTEND=1
-fi
-
 echo -e "\n${YELLOW}[1/4] 检查编译工具链...${NC}"
 MISSING_TOOLS=0
-REQUIRED_TOOLS="cargo rustc pkg-config gcc"
-if [ "$NEED_BUILD_FRONTEND" -eq 1 ]; then
-    REQUIRED_TOOLS="node npm $REQUIRED_TOOLS"
-fi
-
-for tool in $REQUIRED_TOOLS; do
+for tool in node npm cargo rustc pkg-config gcc; do
     if ! check_tool "$tool"; then
         MISSING_TOOLS=1
     fi
@@ -58,29 +47,30 @@ if [ "$MISSING_TOOLS" -ne 0 ]; then
     echo -e "  sudo dnf install webkit2gtk4.1-devel openssl-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel"
     exit 1
 fi
-echo -e "${GREEN}✓ 工具链检查通过 ($(cargo --version))${NC}"
+echo -e "${GREEN}✓ 工具链检查通过 (Node $(node -v), $(cargo --version))${NC}"
 
-# 2 & 3. 前端依赖与构建
-if [ "$NEED_BUILD_FRONTEND" -eq 0 ]; then
-    echo -e "\n${GREEN}[2/4 & 3/4] 检测到已存在构建好的前端资源 (dist 目录)，自动跳过前端依赖安装与编译。${NC}"
-    echo -e "${YELLOW}提示: 如需强制重新编译前端，可运行: ./build.sh --force-frontend${NC}"
+# 2. 安装前端依赖（默认使用国内加速源，避免官方源卡死）
+echo -e "\n${YELLOW}[2/4] 安装前端依赖...${NC}"
+NPM_REGISTRY="https://registry.npmmirror.com"
+if [ "${1:-}" = "--official-npm" ]; then
+    NPM_REGISTRY="https://registry.npmjs.org"
+    echo -e "使用官方源: $NPM_REGISTRY"
 else
-    echo -e "\n${YELLOW}[2/4] 准备前端依赖 (使用国内高速镜像源)...${NC}"
-    if [ ! -d "node_modules" ]; then
-        echo -e "正在执行: npm install --legacy-peer-deps --registry=https://registry.npmmirror.com..."
-        npm install --legacy-peer-deps --registry=https://registry.npmmirror.com
-    else
-        echo -e "${GREEN}✓ 前端依赖已存在，跳过 npm install${NC}"
-    fi
-
-    echo -e "\n${YELLOW}[3/4] 编译前端静态资源 (Vite)...${NC}"
-    npm run build
-    if [ ! -d "dist" ]; then
-        echo -e "${RED}[ERROR] 前端构建失败: 未生成 dist 目录!${NC}"
-        exit 1
-    fi
-    echo -e "${GREEN}✓ 前端构建完成 (dist 目录已就绪)${NC}"
+    echo -e "使用国内镜像源加速: $NPM_REGISTRY"
+    echo -e "(如需强制使用官方源，可添加参数: ./build.sh --official-npm)"
 fi
+
+npm install --legacy-peer-deps --registry="$NPM_REGISTRY"
+echo -e "${GREEN}✓ 前端依赖安装完成${NC}"
+
+# 3. 编译前端
+echo -e "\n${YELLOW}[3/4] 编译前端静态资源 (Vite)...${NC}"
+npm run build
+if [ ! -d "dist" ]; then
+    echo -e "${RED}[ERROR] 前端构建失败: 未生成 dist 目录!${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ 前端构建完成 (dist 目录已生成)${NC}"
 
 # 4. 编译 Rust 后端
 echo -e "\n${YELLOW}[4/4] 编译 Rust 后端 (Cargo Release)...${NC}"
