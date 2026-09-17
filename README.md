@@ -22,8 +22,6 @@
 
   <p>
     <a href="#-核心功能">核心功能</a> • 
-    <a href="#-界面导览">界面导览</a> • 
-    <a href="#-技术架构">技术架构</a> • 
     <a href="#-安装指南">安装指南</a> • 
     <a href="#-快速接入">快速接入</a>
   </p>
@@ -76,36 +74,7 @@
 *   **高级画质控制**: 支持通过 OpenAI `size` (如 `1024x1024`, `16:9`) 参数自动映射到 Imagen 3 的相应规格。
 *   **超强 Body 支持**: 后端支持高达 **100MB** (可配置) 的 Payload，处理 4K 高清图识别绰绰有余。
 
-## 📸 界面导览 (GUI Overview)
-
-| | |
-| :---: | :---: |
-| ![仪表盘 - 全局配额监控与一键切换](docs/images/dashboard-light.png) <br> 仪表盘 | ![账号列表 - 高密度配额展示与 403 智能标注](docs/images/accounts-light.png) <br> 账号列表 |
-| ![关于页面 - 关于 Antigravity Tools](docs/images/about-dark.png) <br> 关于页面 | ![API 反代 - 服务控制](docs/images/v3/proxy-settings.png) <br> API 反代 |
-| ![系统设置 - 通用配置](docs/images/settings-dark.png) <br> 系统设置 | |
-
-### 💡 使用案例 (Usage Examples)
-
-| | |
-| :---: | :---: |
-| ![Claude Code 联网搜索 - 结构化来源与引文显示](docs/images/usage/claude-code-search.png) <br> Claude Code 联网搜索 | ![Cherry Studio 深度集成 - 原生回显搜索引文与来源链接](docs/images/usage/cherry-studio-citations.png) <br> Cherry Studio 深度集成 |
-| ![Imagen 3 高级绘图 - 完美还原 Prompt 意境与细节](docs/images/usage/image-gen-nebula.png) <br> Imagen 3 高级绘图 | ![Kilo Code 接入 - 多账号极速轮换与模型穿透](docs/images/usage/kilo-code-integration.png) <br> Kilo Code 接入 |
-
-## 🏗️ 技术架构 (Architecture)
-
-```mermaid
-graph TD
-    Client([外部应用: Claude Code/NextChat]) -->|OpenAI/Anthropic| Gateway[Antigravity Axum Server]
-    Gateway --> Middleware[中间件: 鉴权/限流/日志]
-    Middleware --> Router[Model Router: ID 映射]
-    Router --> Dispatcher[账号分发器: 轮询/权重]
-    Dispatcher --> Mapper[协议转换器: Request Mapper]
-    Mapper --> Upstream[上游请求: Google/Anthropic API]
-    Upstream --> ResponseMapper[响应转换器: Response Mapper]
-    ResponseMapper --> Client
-```
-
-##  安装指南 (Installation)
+## 📥 安装指南 (Installation)
 
 ### 选项 A: 终端安装 (推荐)
 

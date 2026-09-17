@@ -19,8 +19,6 @@
 
   <p>
     <a href="#-features">Features</a> • 
-    <a href="#-gui-overview">GUI Overview</a> • 
-    <a href="#-architecture">Architecture</a> • 
     <a href="#-installation">Installation</a> • 
     <a href="#-quick-integration">Integration</a>
   </p>
@@ -71,35 +69,6 @@ If you like this project, you might also be interested in:
 ### 5. 🎨 Multimodal & Imagen 3 Support
 *   **Advanced Image Control**: Supports precise control over image generation tasks via OpenAI `size` (e.g., `1024x1024`, `16:9`) parameters or model name suffixes.
 *   **Enhanced Payload Support**: The backend supports payloads up to **100MB** (configurable), more than enough for 4K HD image recognition and processing.
-
-##  GUI Overview
-
-| | |
-| :---: | :---: |
-| ![Dashboard - Global Quota Monitoring & One-click Switch](docs/images/dashboard-light.png) <br> Dashboard | ![Account List - High-density Quota Display & Smart 403 Labeling](docs/images/accounts-light.png) <br> Account List |
-| ![About Page - About Antigravity Tools](docs/images/about-dark.png) <br> About Page | ![API Proxy - Service Control](docs/images/v3/proxy-settings.png) <br> API Proxy |
-| ![Settings - General Config](docs/images/settings-dark.png) <br> Settings | |
-
-### 💡 Usage Examples
-
-| | |
-| :---: | :---: |
-| ![Claude Code Web Search - Structured source and citation display](docs/images/usage/claude-code-search.png) <br> Claude Code Web Search | ![Cherry Studio Deep Integration - Native echo of search citations and source links](docs/images/usage/cherry-studio-citations.png) <br> Cherry Studio Integration |
-| ![Imagen 3 Advanced Drawing - Perfect restoration of Prompt artistic conception and details](docs/images/usage/image-gen-nebula.png) <br> Imagen 3 Advanced Drawing | ![Kilo Code Integration - Multi-account high-speed rotation and model penetration](docs/images/usage/kilo-code-integration.png) <br> Kilo Code Integration |
-
-## 🏗️ Architecture
-
-```mermaid
-graph TD
-    Client([External Apps: Claude Code/NextChat]) -->|OpenAI/Anthropic| Gateway[Antigravity Axum Server]
-    Gateway --> Middleware[Middleware: Auth/Rate Limit/Logs]
-    Middleware --> Router[Model Router: ID Mapping]
-    Router --> Dispatcher[Dispatcher: Rotation/Weights]
-    Dispatcher --> Mapper[Request Mapper]
-    Mapper --> Upstream[Upstream: Google/Anthropic API]
-    Upstream --> ResponseMapper[Response Mapper]
-    ResponseMapper --> Client
-```
 
 ## 📥 Installation
 
