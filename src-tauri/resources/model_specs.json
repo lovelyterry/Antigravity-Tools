@@ -15,6 +15,11 @@
             "thinking_budget": 32768,
             "is_thinking": true
         },
+        "gemini-3.8-flash-medium": {
+            "max_output_tokens": 65536,
+            "thinking_budget": 32768,
+            "is_thinking": true
+        },
         "gemini-3-pro-high": {
             "max_output_tokens": 65536,
             "thinking_budget": 49152,
@@ -42,11 +47,11 @@
         }
     },
     "aliases": {
-        "gpt-4o": "gemini-2.5-flash",
-        "gpt-3.5-turbo": "gemini-2.0-flash-lite",
-        "claude-3-5-sonnet": "claude-sonnet-4-6",
-        "claude-3-7-sonnet": "claude-sonnet-4-6-thinking",
-        "claude-opus-5": "claude-opus-4-6-thinking",
-        "claude-opus-5-thinking": "claude-opus-4-6-thinking"
+        "gpt-4o": "gemini-3.8-flash-medium",
+        "gpt-3.5-turbo": "gemini-3.8-flash-medium",
+        "claude-3-5-sonnet": "gemini-3.8-flash-medium",
+        "claude-3-7-sonnet": "gemini-3.8-flash-medium",
+        "claude-opus-5": "gemini-3.8-flash-medium",
+        "claude-opus-5-thinking": "gemini-3.8-flash-medium"
     }
 }

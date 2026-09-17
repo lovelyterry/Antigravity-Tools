@@ -20,59 +20,56 @@ pub fn update_dynamic_forwarding_rules(old_model: String, new_model: String) {
 static CLAUDE_TO_GEMINI: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
     let mut m = HashMap::new();
 
-    // 直接支持的模型
-    m.insert("claude-sonnet-4-6", "claude-sonnet-4-6");
-    m.insert("claude-sonnet-4-6-thinking", "claude-sonnet-4-6-thinking");
-
-    // [Redirect] Sonnet 4.5 -> Sonnet 4.6
-    m.insert("claude-sonnet-4-5", "claude-sonnet-4-6");
-    m.insert("claude-sonnet-4-5-thinking", "claude-sonnet-4-6-thinking");
-
-    // 别名映射
-    m.insert("claude-sonnet-4-5-20250929", "claude-sonnet-4-6-thinking");
-    m.insert("claude-3-5-sonnet-20241022", "claude-sonnet-4-6");
-    m.insert("claude-3-5-sonnet-20240620", "claude-sonnet-4-6");
-    // [Redirect] Opus 4.5 -> Opus 4.6 (Issue #1743)
-    m.insert("claude-opus-4", "claude-opus-4-6-thinking");
-    m.insert("claude-opus-4-5-thinking", "claude-opus-4-6-thinking");
-    m.insert("claude-opus-4-5-20251101", "claude-opus-4-6-thinking");
+    // 直接支持的模型与重定向 -> 全部默认映射至 gemini-3.8-flash-medium
+    m.insert("claude-sonnet-4-6", "gemini-3.8-flash-medium");
+    m.insert("claude-sonnet-4-6-thinking", "gemini-3.8-flash-medium");
+    m.insert("claude-sonnet-4-5", "gemini-3.8-flash-medium");
+    m.insert("claude-sonnet-4-5-thinking", "gemini-3.8-flash-medium");
+    m.insert("claude-sonnet-4-5-20250929", "gemini-3.8-flash-medium");
+    m.insert("claude-3-5-sonnet-20241022", "gemini-3.8-flash-medium");
+    m.insert("claude-3-5-sonnet-20240620", "gemini-3.8-flash-medium");
+    m.insert("claude-3-5-sonnet", "gemini-3.8-flash-medium");
+    m.insert("claude-3-7-sonnet", "gemini-3.8-flash-medium");
+    m.insert("claude-opus-4", "gemini-3.8-flash-medium");
+    m.insert("claude-opus-4-5-thinking", "gemini-3.8-flash-medium");
+    m.insert("claude-opus-4-5-20251101", "gemini-3.8-flash-medium");
 
     // Claude Opus 4.6 / 5.x
-    m.insert("claude-opus-4-6-thinking", "claude-opus-4-6-thinking");
-    m.insert("claude-opus-4-6", "claude-opus-4-6-thinking");
-    m.insert("claude-opus-4.6-thinking", "claude-opus-4-6-thinking");
-    m.insert("claude-opus-4.6", "claude-opus-4-6-thinking");
-    m.insert("claude-opus-4-6-20260201", "claude-opus-4-6-thinking");
-    m.insert("claude-opus-5", "claude-opus-4-6-thinking");
-    m.insert("claude-opus-5-thinking", "claude-opus-4-6-thinking");
-    m.insert("claude-opus-5-20260201", "claude-opus-4-6-thinking");
-    m.insert("claude-5-opus", "claude-opus-4-6-thinking");
-    m.insert("claude-3-opus", "claude-opus-4-6-thinking");
-    m.insert("claude-3-opus-20240229", "claude-opus-4-6-thinking");
+    m.insert("claude-opus-4-6-thinking", "gemini-3.8-flash-medium");
+    m.insert("claude-opus-4-6", "gemini-3.8-flash-medium");
+    m.insert("claude-opus-4.6-thinking", "gemini-3.8-flash-medium");
+    m.insert("claude-opus-4.6", "gemini-3.8-flash-medium");
+    m.insert("claude-opus-4-6-20260201", "gemini-3.8-flash-medium");
+    m.insert("claude-opus-5", "gemini-3.8-flash-medium");
+    m.insert("claude-opus-5-thinking", "gemini-3.8-flash-medium");
+    m.insert("claude-opus-5-20260201", "gemini-3.8-flash-medium");
+    m.insert("claude-5-opus", "gemini-3.8-flash-medium");
+    m.insert("claude-3-opus", "gemini-3.8-flash-medium");
+    m.insert("claude-3-opus-20240229", "gemini-3.8-flash-medium");
 
-    m.insert("claude-haiku-4", "claude-sonnet-4-6");
-    m.insert("claude-3-haiku-20240307", "claude-sonnet-4-6");
-    m.insert("claude-haiku-4-5-20251001", "claude-sonnet-4-6");
+    m.insert("claude-haiku-4", "gemini-3.8-flash-medium");
+    m.insert("claude-3-haiku-20240307", "gemini-3.8-flash-medium");
+    m.insert("claude-haiku-4-5-20251001", "gemini-3.8-flash-medium");
     // OpenAI 协议映射表
-    m.insert("gpt-4", "gemini-2.5-flash");
-    m.insert("gpt-4-turbo", "gemini-2.5-flash");
-    m.insert("gpt-4-turbo-preview", "gemini-2.5-flash");
-    m.insert("gpt-4-0125-preview", "gemini-2.5-flash");
-    m.insert("gpt-4-1106-preview", "gemini-2.5-flash");
-    m.insert("gpt-4-0613", "gemini-2.5-flash");
+    m.insert("gpt-4", "gemini-3.8-flash-medium");
+    m.insert("gpt-4-turbo", "gemini-3.8-flash-medium");
+    m.insert("gpt-4-turbo-preview", "gemini-3.8-flash-medium");
+    m.insert("gpt-4-0125-preview", "gemini-3.8-flash-medium");
+    m.insert("gpt-4-1106-preview", "gemini-3.8-flash-medium");
+    m.insert("gpt-4-0613", "gemini-3.8-flash-medium");
 
-    m.insert("gpt-4o", "gemini-2.5-flash");
-    m.insert("gpt-4o-2024-05-13", "gemini-2.5-flash");
-    m.insert("gpt-4o-2024-08-06", "gemini-2.5-flash");
+    m.insert("gpt-4o", "gemini-3.8-flash-medium");
+    m.insert("gpt-4o-2024-05-13", "gemini-3.8-flash-medium");
+    m.insert("gpt-4o-2024-08-06", "gemini-3.8-flash-medium");
 
-    m.insert("gpt-4o-mini", "gemini-2.5-flash");
-    m.insert("gpt-4o-mini-2024-07-18", "gemini-2.5-flash");
+    m.insert("gpt-4o-mini", "gemini-3.8-flash-medium");
+    m.insert("gpt-4o-mini-2024-07-18", "gemini-3.8-flash-medium");
 
-    m.insert("gpt-3.5-turbo", "gemini-2.5-flash");
-    m.insert("gpt-3.5-turbo-16k", "gemini-2.5-flash");
-    m.insert("gpt-3.5-turbo-0125", "gemini-2.5-flash");
-    m.insert("gpt-3.5-turbo-1106", "gemini-2.5-flash");
-    m.insert("gpt-3.5-turbo-0613", "gemini-2.5-flash");
+    m.insert("gpt-3.5-turbo", "gemini-3.8-flash-medium");
+    m.insert("gpt-3.5-turbo-16k", "gemini-3.8-flash-medium");
+    m.insert("gpt-3.5-turbo-0125", "gemini-3.8-flash-medium");
+    m.insert("gpt-3.5-turbo-1106", "gemini-3.8-flash-medium");
+    m.insert("gpt-3.5-turbo-0613", "gemini-3.8-flash-medium");
 
     // Gemini 协议映射表
     m.insert("gemini-2.5-flash-lite", "gemini-2.5-flash");
@@ -138,30 +135,13 @@ pub fn map_claude_model_to_gemini(input: &str) -> String {
         return mapped.to_string();
     }
 
-    // 2. Pass-through known prefixes (gemini-, -thinking) to support dynamic suffixes
-    if input.starts_with("gemini-") || input.contains("thinking") {
+    // 2. 如果输入已经是具体目标模型或图片生成模型，直接透传
+    if input == "gemini-3.8-flash-medium" || input.contains("image") {
         return input.to_string();
     }
 
-    let lower = input.to_lowercase();
-
-    // 3. Opus 系列智能兜底映射到当前最高可用的 Opus 思考模型
-    if lower.contains("opus") {
-        return "claude-opus-4-6-thinking".to_string();
-    }
-
-    // 4. Sonnet 系列智能兜底映射到当前最高可用的 Sonnet 模型
-    if lower.contains("sonnet") {
-        return "claude-sonnet-4-6".to_string();
-    }
-
-    // 5. Haiku 系列智能兜底映射
-    if lower.contains("haiku") {
-        return "claude-sonnet-4-6".to_string();
-    }
-
-    // 6. 直接透传未知模型 ID (允许用户体验未发布的特殊模型)
-    input.to_string()
+    // 3. 所有其它未精确指定的模型，全部默认映射到 gemini-3.8-flash-medium
+    "gemini-3.8-flash-medium".to_string()
 }
 
 /// 获取所有内置支持的模型列表关键字
@@ -301,11 +281,16 @@ pub fn resolve_model_route(
 
     // 1. 精确匹配 (次高优先级)
     if let Some(target) = custom_mapping.get(original_model) {
+        let final_target = if target == "claude-opus-4-6-thinking" {
+            "gemini-3.8-flash-medium"
+        } else {
+            target.as_str()
+        };
         crate::modules::logger::log_info(&format!(
             "[Router] 精确映射: {} -> {}",
-            original_model, target
+            original_model, final_target
         ));
-        return target.clone();
+        return final_target.to_string();
     }
 
     // 2. Wildcard match - most specific (highest non-wildcard chars) wins
@@ -324,11 +309,16 @@ pub fn resolve_model_route(
     }
 
     if let Some((pattern, target, _)) = best_match {
+        let final_target = if target == "claude-opus-4-6-thinking" {
+            "gemini-3.8-flash-medium"
+        } else {
+            target
+        };
         crate::modules::logger::log_info(&format!(
             "[Router] Wildcard match: {} -> {} (rule: {})",
-            original_model, target, pattern
+            original_model, final_target, pattern
         ));
-        return target.to_string();
+        return final_target.to_string();
     }
 
     // 3. 系统默认映射
@@ -396,39 +386,23 @@ mod tests {
     fn test_model_mapping() {
         assert_eq!(
             map_claude_model_to_gemini("claude-3-5-sonnet-20241022"),
-            "claude-sonnet-4-6"
+            "gemini-3.8-flash-medium"
         );
-        // [Redirect] Sonnet 4.5 -> Sonnet 4.6
         assert_eq!(
             map_claude_model_to_gemini("claude-sonnet-4-5"),
-            "claude-sonnet-4-6"
-        );
-        assert_eq!(
-            map_claude_model_to_gemini("claude-sonnet-4-5-thinking"),
-            "claude-sonnet-4-6-thinking"
-        );
-        assert_eq!(
-            map_claude_model_to_gemini("claude-opus-4"),
-            "claude-opus-4-6-thinking"
+            "gemini-3.8-flash-medium"
         );
         assert_eq!(
             map_claude_model_to_gemini("claude-opus-5"),
-            "claude-opus-4-6-thinking"
-        );
-        // Test gemini pass-through (should not be caught by "mini" rule)
-        assert_eq!(
-            map_claude_model_to_gemini("gemini-2.5-flash-mini-test"),
-            "gemini-2.5-flash-mini-test"
-        );
-        assert_eq!(map_claude_model_to_gemini("unknown-model"), "unknown-model");
-        // Gemini Pro concrete IDs should pass through unchanged.
-        assert_eq!(
-            map_claude_model_to_gemini("gemini-3-pro-high"),
-            "gemini-pro-agent"
+            "gemini-3.8-flash-medium"
         );
         assert_eq!(
-            map_claude_model_to_gemini("gemini-3-pro-low"),
-            "gemini-3-pro-low"
+            map_claude_model_to_gemini("unknown-model"),
+            "gemini-3.8-flash-medium"
+        );
+        assert_eq!(
+            map_claude_model_to_gemini("gemini-3.8-flash-medium"),
+            "gemini-3.8-flash-medium"
         );
     }
 
