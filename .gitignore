@@ -48,6 +48,7 @@ __pycache__/
 scripts/_*.json
 scripts/dump_quota_raw.py
 scripts/dump_full.py
+*imported_accounts.json
 scripts/probe_weekly.py
 scripts/probe_quota_summary.pyDOCKER_DEPLOYMENT.md
 pnpm-lock.yaml
