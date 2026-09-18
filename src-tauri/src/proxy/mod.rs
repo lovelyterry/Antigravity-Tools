@@ -46,7 +46,6 @@ pub use token_manager::TokenManager;
 pub mod tests;
 
 pub mod adapters;
-pub mod adapters;
 pub use config::update_global_system_prompt_config;
 pub use config::update_image_thinking_mode;
 pub use config::update_thinking_budget_config;

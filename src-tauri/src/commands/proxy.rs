@@ -260,7 +260,7 @@ pub async fn ensure_admin_server(
 
     *admin_lock = Some(AdminServerInstance {
         axum_server,
-        _server_handle: server_handle,
+        server_handle,
     });
 
     // [NEW] 初始化全局 Thinking Budget 配置
