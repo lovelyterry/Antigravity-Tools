@@ -1,10 +1,10 @@
-mod commands;
+pub mod commands;
 pub mod constants;
 pub mod error;
-mod models;
-mod modules;
-mod proxy; // Proxy service module
-mod utils;
+pub mod models;
+pub mod modules;
+pub mod proxy; // Proxy service module
+pub mod utils;
 
 use modules::logger;
 use tracing::{error, info, warn};
@@ -199,15 +199,15 @@ pub fn run() {
                 }
 
                 info!("--------------------------------------------------");
-                info!("🚀 Antigravity-Tools Server is starting...");
-                info!("📍 Port: {}", config.proxy.port);
+                info!("🚀 Headless mode proxy service starting...");
+                info!("📍 Web UI: http://localhost:{}", config.proxy.port);
                 info!("🔑 Current API Key: {}", config.proxy.api_key);
                 if let Some(ref pwd) = config.proxy.admin_password {
                     info!("🔐 Web UI Password: {}", pwd);
                 } else {
                     info!("🔐 Web UI Password: {}", config.proxy.api_key);
                 }
-                info!("💡 Web UI is accessible on: http://0.0.0.0:{}", config.proxy.port);
+                info!("💡 Tips: You can use these keys to login to Web UI and access AI APIs.");
                 info!("--------------------------------------------------");
 
                 // Persist environment overrides

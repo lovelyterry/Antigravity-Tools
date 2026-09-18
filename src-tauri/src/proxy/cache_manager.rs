@@ -31,7 +31,6 @@ const PREFIX_TRACKER_LIMIT: usize = 500;
 /// Layer 1 & 2 TTL: 30 min — 比最终内容缓存更长，因为不随 session 变化
 const LAYER_12_TTL: Duration = Duration::from_secs(30 * 60);
 /// Layer 3 TTL: 1 hour — 对齐 Gemini 显式缓存默认 TTL
-const LAYER_3_TTL: Duration = Duration::from_secs(3600);
 
 // ===== Layer 1: System Instruction Cache =====
 
@@ -65,13 +64,13 @@ struct ToolsCacheEntry {
 #[derive(Debug, Clone)]
 struct PrefixTrackingEntry {
     /// Layer 1 的 hash (用于关联)
-    si_hash: String,
+    _si_hash: String,
     /// Layer 2 的 hash (用于关联)
-    tools_hash: String,
+    _tools_hash: String,
     /// Gemini 缓存的资源名 (cachedContents/xxx)
     cache_name: String,
     /// 创建时间
-    created_at: Instant,
+    _created_at: Instant,
     /// 过期时间
     expires_at: Instant,
     /// 隐式缓存命中次数 (cachedContentTokenCount > 0)
@@ -79,7 +78,7 @@ struct PrefixTrackingEntry {
     /// 显式缓存命中次数 (成功注入 cachedContent)
     explicit_hit_count: u64,
     /// 模型名
-    model: String,
+    _model: String,
 }
 
 // ===== Stats =====
@@ -435,22 +434,22 @@ impl CacheManager {
         &self,
         hash: String,
         cache_name: String,
-        si_hash: String,
-        tools_hash: String,
-        model: String,
+        _si_hash: String,
+        _tools_hash: String,
+        _model: String,
         ttl_secs: Option<u64>,
     ) {
         let ttl = ttl_secs.unwrap_or(3600);
         let now = Instant::now();
         let entry = PrefixTrackingEntry {
-            si_hash,
-            tools_hash,
+            _si_hash,
+            _tools_hash,
             cache_name,
-            created_at: now,
+            _created_at: now,
             expires_at: now + Duration::from_secs(ttl),
             implicit_hit_count: 0,
             explicit_hit_count: 0,
-            model,
+            _model,
         };
         tracing::info!(
             "[CacheManager:L3-Prefix] INSERT hash={} ttl={}s",

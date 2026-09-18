@@ -34,16 +34,11 @@ pub mod video; // 视频处理模块
 pub mod zai_vision_mcp; // Built-in Vision MCP server state
 pub mod zai_vision_tools; // Built-in Vision MCP tools (z.ai vision API) // 调试日志
 
-pub use config::update_global_system_prompt_config;
-pub use config::update_image_thinking_mode;
-pub use config::update_thinking_budget_config;
 pub use config::ProxyAuthMode;
 pub use config::ProxyConfig;
-pub use config::ProxyPoolConfig;
 pub use config::ZaiConfig;
 pub use config::ZaiDispatchMode;
 pub use security::ProxySecurityConfig;
-pub use server::AxumServer;
 pub use signature_cache::SignatureCache;
 pub use token_manager::TokenManager;
 
@@ -51,3 +46,7 @@ pub use token_manager::TokenManager;
 pub mod tests;
 
 pub mod adapters;
+pub use config::update_global_system_prompt_config;
+pub use config::update_image_thinking_mode;
+pub use config::update_thinking_budget_config;
+pub use server::AxumServer;

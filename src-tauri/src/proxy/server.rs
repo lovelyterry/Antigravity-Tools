@@ -987,7 +987,7 @@ impl AxumServer {
 
         // 绑定地址（使用 socket2 开启 SO_REUSEADDR，防止端口残留和 TIME_WAIT 占用）
         let listener = bind_tcp_listener(&host, port)?;
-        tracing::info!("反代服务器启动在 http://{}:{}", host, port);
+        tracing::info!("反代服务器启动在 http://localhost:{} (监听地址: http://{}:{})", port, host, port);
 
         // 创建统一取消令牌
         let cancel_token = tokio_util::sync::CancellationToken::new();

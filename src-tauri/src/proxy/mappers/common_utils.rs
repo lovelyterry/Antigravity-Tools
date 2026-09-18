@@ -420,9 +420,7 @@ pub fn image_aspect_ratio_from_size(size: &str) -> Option<&'static str> {
     None
 }
 
-fn calculate_aspect_ratio_from_size(size: &str) -> &'static str {
-    image_aspect_ratio_from_size(size).unwrap_or("1:1")
-}
+
 
 /// Inject current googleSearch tool and ensure no duplicate legacy search tools.
 /// When client-defined function tools are present, skips googleSearch to avoid client-side empty/unknown tool dispatch errors.

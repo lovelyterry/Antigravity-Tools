@@ -2445,22 +2445,6 @@ impl TokenManager {
     }
 
     /// 保存 project_id 到账号文件
-    async fn save_project_id(&self, account_id: &str, project_id: &str) -> Result<(), String> {
-        let path = self
-            .tokens
-            .get(account_id)
-            .ok_or("账号不存在")?
-            .account_path
-            .clone();
-        let project_id_owned = project_id.to_string();
-        update_account_json(&path, move |content| {
-            content["token"]["project_id"] = serde_json::Value::String(project_id_owned);
-        })
-        .await?;
-
-        tracing::debug!("已保存 project_id 到账号 {}", account_id);
-        Ok(())
-    }
 
     /// 保存刷新后的 token 到账号文件
     async fn save_refreshed_token(

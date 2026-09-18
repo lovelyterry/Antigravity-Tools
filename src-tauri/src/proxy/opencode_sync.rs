@@ -23,7 +23,6 @@ const BACKUP_SUFFIX: &str = ".antigravity-manager.bak";
 const OLD_BACKUP_SUFFIX: &str = ".antigravity.bak";
 
 const ANTIGRAVITY_PROVIDER_ID: &str = "antigravity-manager";
-const OPENAI_COMPATIBLE_NPM: &str = "@ai-sdk/openai-compatible";
 
 /// Variant type for model variants
 #[derive(Debug, Clone, Copy)]
@@ -1255,32 +1254,9 @@ fn merge_hyphenated_version_tokens(model_id: &str) -> String {
 }
 
 /// IDs to try against the catalog: original, vendor-stripped, dotted/dashed version variants.
-fn catalog_lookup_ids(model_id: &str) -> Vec<String> {
-    let bare = strip_model_vendor_prefix(model_id.trim());
-    let mut ids = Vec::new();
-    let mut push = |id: String| {
-        if !id.is_empty() && !ids.iter().any(|existing| existing == &id) {
-            ids.push(id);
-        }
-    };
-    push(model_id.trim().to_string());
-    push(bare.to_string());
-    push(bare.replace('.', "-"));
-    push(merge_hyphenated_version_tokens(bare));
-    ids
-}
 
-fn lookup_catalog_model<'a>(
-    catalog: &HashMap<&str, &'a ModelDef>,
-    model_id: &str,
-) -> Option<&'a ModelDef> {
-    for candidate in catalog_lookup_ids(model_id) {
-        if let Some(model) = catalog.get(candidate.as_str()) {
-            return Some(*model);
-        }
-    }
-    None
-}
+
+
 
 /// Derive a readable name from a model id, preserving version dots
 /// (e.g. "gemini-3.5-flash-low" -> "Gemini 3.5 Flash Low",

@@ -1285,7 +1285,6 @@ pub fn wrap_request(
         None,
     )
 }
-static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {

@@ -138,7 +138,7 @@ impl ProxyRequestLog {
 }
 
 #[derive(Default)]
-pub(crate) struct UpstreamCapture {
+pub struct UpstreamCapture {
     body: Option<String>,
     headers: Option<String>,
 }

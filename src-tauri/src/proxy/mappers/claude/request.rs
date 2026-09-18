@@ -497,8 +497,7 @@ pub fn transform_claude_request_in_timed(
 
     //  Map model name (Use standard mapping)
     // [IMPROVED] 提取 web search 模型为常量，便于维护
-    const WEB_SEARCH_FALLBACK_MODEL: &str = "gemini-2.5-flash";
-
+    
     let mapped_model =
         crate::proxy::common::model_mapping::map_claude_model_to_gemini(&claude_req.model);
 

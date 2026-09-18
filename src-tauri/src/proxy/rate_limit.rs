@@ -608,10 +608,7 @@ impl RateLimitTracker {
     }
 
     /// 从错误消息 body 中解析重置时间
-    fn parse_retry_time_from_body(&self, body: &str) -> Option<u64> {
-        crate::proxy::upstream::retry::parse_retry_delay(body, None)
-            .map(|delay_ms| delay_ms.saturating_add(999) / 1000)
-    }
+    
 
     fn parse_duration_string_baseline(&self, value: &str) -> Option<u64> {
         let re = Regex::new(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?")

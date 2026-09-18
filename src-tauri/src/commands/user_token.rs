@@ -1,4 +1,4 @@
-use crate::modules::user_token_db::{self, TokenIpBinding, UserToken};
+use crate::modules::user_token_db::{self, UserToken};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -65,10 +65,7 @@ pub async fn renew_user_token(id: String, expires_type: String) -> Result<(), St
     user_token_db::renew_token(&id, &expires_type)
 }
 
-/// 获取令牌 IP 绑定
-pub async fn get_token_ip_bindings(token_id: String) -> Result<Vec<TokenIpBinding>, String> {
-    user_token_db::get_token_ips(&token_id)
-}
+
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserTokenStats {
