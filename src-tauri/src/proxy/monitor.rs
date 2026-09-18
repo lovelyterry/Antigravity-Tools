@@ -152,7 +152,9 @@ tokio::task_local! {
 
 impl UpstreamRequestBodyHolder {
     pub fn new() -> Self {
-        Self(std::sync::Arc::new(std::sync::Mutex::new(UpstreamCapture::default())))
+        Self(std::sync::Arc::new(std::sync::Mutex::new(
+            UpstreamCapture::default(),
+        )))
     }
 
     pub fn set(&self, body: String) {
@@ -194,8 +196,14 @@ fn sanitize_upstream_debug_value(val: &serde_json::Value) -> serde_json::Value {
             serde_json::Value::Array(arr.iter().map(sanitize_upstream_debug_value).collect())
         }
         serde_json::Value::Object(map) => {
-            let is_inline = map.get("mimeType").and_then(serde_json::Value::as_str).is_some()
-                && map.get("data").and_then(serde_json::Value::as_str).is_some();
+            let is_inline = map
+                .get("mimeType")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+                && map
+                    .get("data")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some();
             serde_json::Value::Object(
                 map.iter()
                     .map(|(k, v)| {

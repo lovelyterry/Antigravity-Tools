@@ -1742,7 +1742,9 @@ fn prefix_with_step_marker(_marker: Option<String>, content: String) -> String {
 pub async fn handle_chat_completions(
     State(state): State<AppState>,
     headers: HeaderMap, // [CHANGED] Extract headers
-    upstream_recorder: Option<axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>>,
+    upstream_recorder: Option<
+        axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>,
+    >,
     Json(mut body): Json<Value>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let clean_start = std::time::Instant::now();
@@ -1843,6 +1845,7 @@ pub async fn handle_chat_completions(
                     " ".to_string(),
                 )),
                 reasoning_content: None,
+                signature: None,
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
@@ -1935,17 +1938,39 @@ pub async fn handle_chat_completions(
         client_budget
     };
 
+    let effort_hint = openai_req
+        .reasoning_effort
+        .as_deref()
+        .or_else(|| {
+            openai_req
+                .reasoning
+                .as_ref()
+                .and_then(|r| r.effort.as_deref())
+        })
+        .or_else(|| {
+            openai_req
+                .thinking
+                .as_ref()
+                .and_then(|t| t.effort.as_deref())
+        });
+    let effort_tier = crate::proxy::common::variant_mapping::tier_from_effort(effort_hint);
+
     let variant_spec =
         if crate::proxy::mappers::openai::request::is_tiered_flash_model(&openai_req.model) {
             None
         } else {
-            crate::proxy::common::variant_mapping::resolve(&openai_req.model, effective_budget_hint)
+            crate::proxy::common::variant_mapping::resolve_with_tier(
+                &openai_req.model,
+                effort_tier,
+                effective_budget_hint,
+            )
         };
     if let Some(spec) = variant_spec {
         tracing::info!(
-            "[{}] [Variant] canonical='{}' budget_hint={:?} -> real_model='{}' budget={} maxOut={}",
+            "[{}] [Variant] canonical='{}' effort={:?} budget_hint={:?} -> real_model='{}' budget={} maxOut={}",
             trace_id,
             openai_req.model,
+            effort_hint,
             effective_budget_hint,
             spec.id,
             spec.thinking_budget,
@@ -1963,7 +1988,7 @@ pub async fn handle_chat_completions(
             openai_req.thinking = Some(crate::proxy::mappers::openai::models::ThinkingConfig {
                 thinking_type: Some("enabled".to_string()),
                 budget_tokens: Some(spec.thinking_budget),
-                effort: None,
+                effort: effort_hint.map(|s| s.to_string()),
             });
         }
         openai_req.max_tokens = Some(spec.max_output_tokens);
@@ -2102,10 +2127,11 @@ pub async fn handle_chat_completions(
         let norm_total_micros = norm_start.elapsed().as_micros() as u64;
         norm_ms = norm_total_micros.saturating_sub(tf_micros) as f64 / 1000.0;
         think_fill_ms = tf_micros as f64 / 1000.0;
-        let _ = crate::proxy::mappers::context_manager::ContextManager::apply_post_transit_context_mgmt(
-            &mut gemini_body,
-            &mapped_model,
-        );
+        let _ =
+            crate::proxy::mappers::context_manager::ContextManager::apply_post_transit_context_mgmt(
+                &mut gemini_body,
+                &mapped_model,
+            );
         if let Some(ref recorder) = upstream_recorder {
             recorder.set_value(&gemini_body);
         }
@@ -2268,12 +2294,18 @@ pub async fn handle_chat_completions(
                 // [P1 FIX] Enhanced Peek logic to handle heartbeats and slow start
                 // Pre-read until we find meaningful content, skip heartbeats
                 use crate::proxy::mappers::openai::streaming::create_openai_sse_stream;
+                let include_usage = openai_req
+                    .stream_options
+                    .as_ref()
+                    .map(|o| o.include_usage)
+                    .unwrap_or(false);
                 let mut openai_stream = create_openai_sse_stream(
                     gemini_stream,
                     openai_req.model.clone(),
                     session_id,
                     message_count,
                     Some(client_tool_names.clone()),
+                    include_usage,
                 );
 
                 let mut first_data_chunk = None;
@@ -2500,7 +2532,9 @@ pub async fn handle_chat_completions(
                                 .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                                 .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                                 .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
-                                .body(Body::from(serde_json::to_string(&full_response).unwrap_or_default()))
+                                .body(Body::from(
+                                    serde_json::to_string(&full_response).unwrap_or_default(),
+                                ))
                                 .unwrap()
                                 .into_response());
                         }
@@ -2585,7 +2619,9 @@ pub async fn handle_chat_completions(
                 .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                 .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                 .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
-                .body(Body::from(serde_json::to_string(&openai_response).unwrap_or_default()))
+                .body(Body::from(
+                    serde_json::to_string(&openai_response).unwrap_or_default(),
+                ))
                 .unwrap()
                 .into_response());
         }
@@ -2880,7 +2916,9 @@ pub async fn handle_completions(
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     State(state): State<AppState>,
     headers: HeaderMap,
-    upstream_recorder: Option<axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>>,
+    upstream_recorder: Option<
+        axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>,
+    >,
     Json(mut body): Json<Value>,
 ) -> Response {
     let clean_start = std::time::Instant::now();
@@ -3094,14 +3132,25 @@ pub async fn handle_completions(
                             continue;
                         }
 
+                        let reasoning_content = item
+                            .get("reasoning_content")
+                            .or_else(|| item.get("thought"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        let signature = item
+                            .get("thoughtSignature")
+                            .or_else(|| item.get("thought_signature"))
+                            .or_else(|| item.get("signature"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+
                         // 构造消息内容：如果有图像则使用数组格式
-                        if image_parts.is_empty() {
+                        let mut message = if image_parts.is_empty() {
                             let content = prefix_with_step_marker(step_marker, joined_text);
-                            let message = json!({
+                            json!({
                                 "role": role,
                                 "content": content
-                            });
-                            messages.push(message);
+                            })
                         } else {
                             let mut content_blocks: Vec<Value> = Vec::new();
                             let marker_text = prefix_with_step_marker(step_marker, joined_text);
@@ -3112,12 +3161,59 @@ pub async fn handle_completions(
                                 }));
                             }
                             content_blocks.extend(image_parts);
-                            let message = json!({
+                            json!({
                                 "role": role,
                                 "content": content_blocks
-                            });
-                            messages.push(message);
+                            })
+                        };
+
+                        if let Some(rc) = reasoning_content {
+                            if let Some(obj) = message.as_object_mut() {
+                                obj.insert("reasoning_content".to_string(), json!(rc));
+                            }
                         }
+                        if let Some(sig) = signature {
+                            if let Some(obj) = message.as_object_mut() {
+                                obj.insert("thoughtSignature".to_string(), json!(sig));
+                            }
+                        }
+
+                        messages.push(message);
+                    }
+                    "reasoning" => {
+                        let mut thought_text = String::new();
+                        if let Some(summary_arr) = item.get("summary").and_then(Value::as_array) {
+                            for s in summary_arr {
+                                if let Some(t) = s.get("text").and_then(Value::as_str) {
+                                    thought_text.push_str(t);
+                                }
+                            }
+                        }
+                        if thought_text.is_empty() {
+                            if let Some(t) = item
+                                .get("text")
+                                .or_else(|| item.get("thought"))
+                                .and_then(Value::as_str)
+                            {
+                                thought_text.push_str(t);
+                            }
+                        }
+                        let sig = item
+                            .get("thoughtSignature")
+                            .or_else(|| item.get("thought_signature"))
+                            .or_else(|| item.get("signature"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+
+                        let mut msg_obj = json!({
+                            "role": "assistant",
+                            "content": "",
+                            "reasoning_content": thought_text,
+                        });
+                        if let Some(s) = sig {
+                            msg_obj["thoughtSignature"] = json!(s);
+                        }
+                        messages.push(msg_obj);
                     }
                     "function_call" | "custom_tool_call" | "local_shell_call"
                     | "web_search_call" => {
@@ -3146,16 +3242,12 @@ pub async fn handle_completions(
                             name = "shell";
                             if let Some(action) = item.get("action") {
                                 if let Some(exec) = action.get("exec") {
-                                    // Map to ShellCommandToolCallParams (string command) or ShellToolCallParams (array command)
-                                    // Most LLMs prefer a single string for shell
                                     let mut args_obj = serde_json::Map::new();
                                     if let Some(cmd) = exec.get("command") {
-                                        // CRITICAL FIX: The 'shell' tool schema defines 'command' as an ARRAY of strings.
-                                        // We MUST pass it as an array, not a joined string, otherwise Gemini rejects with 400 INVALID_ARGUMENT.
                                         let cmd_val = if cmd.is_string() {
-                                            json!([cmd]) // Wrap in array
+                                            json!([cmd])
                                         } else {
-                                            cmd.clone() // Assume already array
+                                            cmd.clone()
                                         };
                                         args_obj.insert("command".to_string(), cmd_val);
                                     }
@@ -3180,20 +3272,33 @@ pub async fn handle_completions(
                             }
                         }
 
-                        let message = json!({
+                        let tool_sig = item
+                            .get("thoughtSignature")
+                            .or_else(|| item.get("thought_signature"))
+                            .or_else(|| item.get("signature"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+
+                        let mut tc_obj = json!({
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": args_str
+                            }
+                        });
+                        if let Some(ref s) = tool_sig {
+                            tc_obj["thoughtSignature"] = json!(s);
+                        }
+
+                        let mut message = json!({
                             "role": "assistant",
                             "content": "",
-                            "tool_calls": [
-                                {
-                                    "id": call_id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": name,
-                                        "arguments": args_str
-                                    }
-                                }
-                            ]
+                            "tool_calls": [ tc_obj ]
                         });
+                        if let Some(ref s) = tool_sig {
+                            message["thoughtSignature"] = json!(s);
+                        }
                         messages.push(message);
                     }
                     "function_call_output" | "custom_tool_call_output" => {
@@ -3506,6 +3611,7 @@ pub async fn handle_completions(
                     " ".to_string(),
                 )),
                 reasoning_content: None,
+                signature: None,
                 tool_calls: None,
                 tool_call_id: None,
                 name: None,
@@ -3537,10 +3643,9 @@ pub async fn handle_completions(
     let client_tool_names =
         crate::proxy::mappers::openai::request::extract_client_tool_names(&openai_req.tools);
 
-    crate::proxy::mappers::context_manager::ContextManager::restore_openai_reasoning_content(
-        &mut openai_req.messages,
-        &signature_session_id_str,
-    );
+    // Server-authoritative thinking: do NOT prefill messages.reasoning_content from
+    // SignatureCache. OpenAI mapping ignores client/cached reasoning text and fills
+    // placeholders via ThinkingStore hydrate + finalize instead.
 
     let experimental_cfg = state.experimental.read().await;
     let compression_level = if experimental_cfg.compression_level == "disabled" {
@@ -3827,7 +3932,7 @@ pub async fn handle_completions(
                             headers,
                             format!("Token error: {}", e),
                         )
-                            .into_response()
+                            .into_response();
                     }
                 }
             };
@@ -3850,6 +3955,7 @@ pub async fn handle_completions(
                 proxy_token.as_ref(),
                 &routing_session_id,
                 signature_read_key.as_deref(),
+                true, // is_responses_api
             )
         } else {
             transform_openai_request(
@@ -3863,10 +3969,11 @@ pub async fn handle_completions(
         let norm_total_micros = norm_start.elapsed().as_micros() as u64;
         norm_ms = norm_total_micros.saturating_sub(tf_micros) as f64 / 1000.0;
         think_fill_ms = tf_micros as f64 / 1000.0;
-        let _ = crate::proxy::mappers::context_manager::ContextManager::apply_post_transit_context_mgmt(
-            &mut gemini_body,
-            &mapped_model,
-        );
+        let _ =
+            crate::proxy::mappers::context_manager::ContextManager::apply_post_transit_context_mgmt(
+                &mut gemini_body,
+                &mapped_model,
+            );
         if let Some(ref recorder) = upstream_recorder {
             recorder.set_value(&gemini_body);
         }
@@ -4170,6 +4277,7 @@ pub async fn handle_completions(
                         },
                         message_count,
                         Some(client_tool_names.clone()),
+                        true,
                     );
 
                     // Peek Logic (Repeated for safety/correctness on this stream type)
@@ -4302,12 +4410,17 @@ pub async fn handle_completions(
                                     .header("X-Account-Email", email.as_str())
                                     .header("X-Mapped-Model", mapped_model.as_str())
                                     .header("X-Session-Id", session_scope.client_id.as_str())
-                                    .header("X-Antigravity-Session-Id", session_scope.client_id.as_str())
+                                    .header(
+                                        "X-Antigravity-Session-Id",
+                                        session_scope.client_id.as_str(),
+                                    )
                                     .header("X-Timing-Clean-Ms", format!("{:.3}", clean_ms))
                                     .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                                     .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                                     .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
-                                    .body(Body::from(serde_json::to_string(&resp).unwrap_or_default()))
+                                    .body(Body::from(
+                                        serde_json::to_string(&resp).unwrap_or_default(),
+                                    ))
                                     .unwrap()
                                     .into_response();
                             }
@@ -4371,12 +4484,17 @@ pub async fn handle_completions(
                                 .header("X-Account-Email", email.as_str())
                                 .header("X-Mapped-Model", mapped_model.as_str())
                                 .header("X-Session-Id", session_scope.client_id.as_str())
-                                .header("X-Antigravity-Session-Id", session_scope.client_id.as_str())
+                                .header(
+                                    "X-Antigravity-Session-Id",
+                                    session_scope.client_id.as_str(),
+                                )
                                 .header("X-Timing-Clean-Ms", format!("{:.3}", clean_ms))
                                 .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                                 .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                                 .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
-                                .body(Body::from(serde_json::to_string(&legacy_resp).unwrap_or_default()))
+                                .body(Body::from(
+                                    serde_json::to_string(&legacy_resp).unwrap_or_default(),
+                                ))
                                 .unwrap()
                                 .into_response();
                         }
@@ -4505,7 +4623,9 @@ pub async fn handle_completions(
                 .header("X-Timing-Norm-Ms", format!("{:.3}", norm_ms))
                 .header("X-Timing-Thinking-Ms", format!("{:.3}", think_fill_ms))
                 .header("X-Timing-Ttft-Ms", format!("{:.3}", ttft_ms))
-                .body(Body::from(serde_json::to_string(&legacy_resp).unwrap_or_default()))
+                .body(Body::from(
+                    serde_json::to_string(&legacy_resp).unwrap_or_default(),
+                ))
                 .unwrap()
                 .into_response();
         }
@@ -4631,7 +4751,9 @@ pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoRespo
 pub async fn handle_chat_redirection(
     State(state): State<AppState>,
     headers: HeaderMap,
-    upstream_recorder: Option<axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>>,
+    upstream_recorder: Option<
+        axum::extract::Extension<crate::proxy::monitor::UpstreamRequestBodyHolder>,
+    >,
     Json(body): Json<Value>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     handle_chat_completions(State(state), headers, upstream_recorder, Json(body)).await
@@ -5865,8 +5987,13 @@ async fn handle_websocket_session(mut socket: WebSocket, headers: HeaderMap, sta
         };
 
         let openai_body = convert_codex_to_openai_request(normalized);
-        let response_result =
-            handle_chat_completions(State(state.clone()), headers.clone(), None, Json(openai_body)).await;
+        let response_result = handle_chat_completions(
+            State(state.clone()),
+            headers.clone(),
+            None,
+            Json(openai_body),
+        )
+        .await;
 
         let response = match response_result {
             Ok(res) => res.into_response(),
@@ -7133,6 +7260,7 @@ async fn try_compress_openai_with_summary(
         ),
         refusal: None,
         reasoning_content: None,
+        signature: None,
         tool_calls: None,
         tool_call_id: None,
         name: None,
@@ -7173,6 +7301,7 @@ async fn try_compress_openai_with_summary(
             ))),
             refusal: None,
             reasoning_content: None,
+            signature: None,
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -7184,6 +7313,7 @@ async fn try_compress_openai_with_summary(
             )),
             refusal: None,
             reasoning_content: None,
+            signature: None,
             tool_calls: None,
             tool_call_id: None,
             name: None,
