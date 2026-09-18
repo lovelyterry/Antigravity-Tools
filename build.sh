@@ -17,6 +17,7 @@ cd "$SCRIPT_DIR"
 # 解析参数
 AUTO_INSTALL=0
 OFFICIAL_NPM=0
+OFFICIAL_CARGO=0
 for arg in "$@"; do
     case "$arg" in
         --auto-install|--install-deps|-y)
@@ -25,11 +26,15 @@ for arg in "$@"; do
         --official-npm)
             OFFICIAL_NPM=1
             ;;
+        --official-cargo)
+            OFFICIAL_CARGO=1
+            ;;
         --help|-h)
             echo "用法: ./build.sh [选项]"
             echo "选项:"
             echo "  --auto-install, --install-deps, -y  自动检测并安装缺失的编译依赖与 Rust 工具链"
             echo "  --official-npm                      使用 npm 官方源代替国内镜像加速源"
+            echo "  --official-cargo                    使用 crates.io 官方源代替国内镜像加速源"
             echo "  --help, -h                          显示此帮助信息"
             exit 0
             ;;
@@ -59,6 +64,60 @@ setup_libclang_path() {
     fi
 }
 setup_libclang_path
+
+# 配置 Cargo 国内加速镜像源 (rsproxy sparse index)
+setup_cargo_mirror() {
+    if [ "$OFFICIAL_CARGO" -eq 1 ]; then
+        echo -e "${YELLOW}使用 Cargo 官方 crates.io 源${NC}"
+        return 0
+    fi
+
+    local CARGO_DIR="$HOME/.cargo"
+    local CARGO_CONFIG="$CARGO_DIR/config.toml"
+
+    if [ ! -f "$CARGO_CONFIG" ] && [ ! -f "$CARGO_DIR/config" ]; then
+        mkdir -p "$CARGO_DIR"
+        cat << 'EOF' > "$CARGO_CONFIG"
+[source.crates-io]
+replace-with = 'rsproxy-sparse'
+
+[source.rsproxy]
+registry = "https://rsproxy.cn/crates.io-index"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[source.tuna]
+registry = "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git"
+
+[net]
+git-fetch-with-cli = true
+EOF
+        echo -e "${GREEN}✓ 已自动为 Cargo 配置国内加速镜像源 (rsproxy-sparse)${NC}"
+    elif grep -q "\[source\.crates-io\]" "$CARGO_CONFIG" 2>/dev/null || grep -q "\[source\.crates-io\]" "$CARGO_DIR/config" 2>/dev/null; then
+        echo -e "${GREEN}✓ 检测到已配置 Cargo 镜像源，保持现有配置${NC}"
+    else
+        mkdir -p "$CARGO_DIR"
+        cat << 'EOF' >> "$CARGO_CONFIG"
+
+[source.crates-io]
+replace-with = 'rsproxy-sparse'
+
+[source.rsproxy]
+registry = "https://rsproxy.cn/crates.io-index"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[source.tuna]
+registry = "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git"
+
+[net]
+git-fetch-with-cli = true
+EOF
+        echo -e "${GREEN}✓ 已追加 Cargo 国内加速镜像源配置 (rsproxy-sparse)${NC}"
+    fi
+}
 
 echo -e "${CYAN}=====================================================${NC}"
 echo -e "${CYAN}  Antigravity Tools 编译脚本 (Headless Web Server)   ${NC}"
@@ -204,6 +263,7 @@ echo -e "${GREEN}✓ 前端构建完成 (dist 目录已生成)${NC}"
 
 # 4. 编译 Rust 后端
 echo -e "\n${YELLOW}[4/4] 编译 Rust 后端 (Cargo Release)...${NC}"
+setup_cargo_mirror
 cd "$SCRIPT_DIR/src-tauri"
 cargo build --release
 
