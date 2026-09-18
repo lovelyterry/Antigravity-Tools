@@ -133,8 +133,10 @@ fn get_version_windows(exe_path: &PathBuf) -> Result<AntigravityVersion, String>
         return Err("Version information not found in executable".to_string());
     }
 
+    let short_version = extract_semver(&version).unwrap_or_else(|| version.clone());
+
     Ok(AntigravityVersion {
-        short_version: version.clone(),
+        short_version,
         bundle_version: version,
     })
 }

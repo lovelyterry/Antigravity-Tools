@@ -358,7 +358,7 @@ pub fn transform_openai_request_with_session(
 
     // [NEW] 决定是否开启 Thinking 功能（纯服务端权威）:
     // 仅按映射后的模型 ID / 强制思考启发式开启，忽略客户端 thinking.type / budget / effort。
-    let mut actual_include_thinking = !is_under_v3 && (is_thinking_model || force_server_thinking);
+    let actual_include_thinking = !is_under_v3 && (is_thinking_model || force_server_thinking);
 
     // [REFACTORED] 使用 SignatureCache 获取 Session 级别的签名
     // Responses may pass previous_response_id as signature_read_key; always fall back to
