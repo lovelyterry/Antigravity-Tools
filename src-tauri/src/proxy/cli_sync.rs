@@ -162,6 +162,13 @@ fn run_version_command(executable_path: &PathBuf) -> Option<String> {
 }
 
 /// 提取版本号（使用更精确的 semver 匹配）
+fn extract_version(s: &str) -> Option<String> {
+    // 匹配 semver 格式: x.y.z 或 x.y
+    let re = regex::Regex::new(r"(\d+\.\d+(?:\.\d+)?)").ok()?;
+    re.captures(s)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub enum CliApp {
@@ -618,11 +625,15 @@ pub fn sync_config(
                             "OPENAI_API_KEY".to_string(),
                             Value::String(api_key.to_string()),
                         );
-                        // Codex 的 auth.json 似乎也支持 OPENAI_BASE_URL，但 ccs 没写，我们也同步写一下
-                        obj.insert(
-                            "OPENAI_BASE_URL".to_string(),
-                            Value::String(proxy_url.to_string()),
-                        );
+                        if proxy_url.contains("apikey.fun") || proxy_url.contains("apikey.fan") {
+                            obj.remove("OPENAI_BASE_URL");
+                        } else {
+                            // Codex 的 auth.json 似乎也支持 OPENAI_BASE_URL，但 ccs 没写，我们也同步写一下
+                            obj.insert(
+                                "OPENAI_BASE_URL".to_string(),
+                                Value::String(proxy_url.to_string()),
+                            );
+                        }
                     }
                     content = serde_json::to_string_pretty(&json).unwrap();
                 } else if file.name == "config.toml" {
@@ -633,3 +644,261 @@ pub fn sync_config(
 
                     // 必须使用 custom 提供商，Codex 不支持原生的 codex provider
                     let provider_key = "custom";
+                    let is_apikey_fun =
+                        proxy_url.contains("apikey.fun") || proxy_url.contains("apikey.fan");
+                    let display_name = if is_apikey_fun {
+                        "APIKEY.FUN"
+                    } else {
+                        "Custom Node"
+                    };
+
+                    // 优先设置 Root Keys 确保位于顶部
+                    doc.insert("model_provider", value(provider_key));
+
+                    if is_apikey_fun {
+                        doc.insert("model", value("gpt-5.5"));
+                        doc.insert("review_model", value("gpt-5.5"));
+                        doc.insert("model_reasoning_effort", value("high"));
+                        doc.insert("disable_response_storage", value(true));
+                        doc.insert("network_access", value("enabled"));
+                        doc.insert("windows_wsl_setup_acknowledged", value(true));
+                        doc.insert("model_context_window", value(270000));
+                        doc.insert("model_auto_compact_token_limit", value(270000));
+                        doc.insert("effective_context_window_percent", value(95));
+                    } else {
+                        if let Some(m) = model {
+                            doc.insert("model", value(m));
+                        }
+                    }
+
+                    // 移除可能的根级别旧配置
+                    doc.remove("openai_api_key");
+                    doc.remove("openai_base_url");
+
+                    // 设置层级 [model_providers.custom]
+                    let providers = doc
+                        .entry("model_providers")
+                        .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+                    if let Some(p_table) = providers.as_table_mut() {
+                        let custom = p_table
+                            .entry(provider_key)
+                            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+                        if let Some(c_table) = custom.as_table_mut() {
+                            c_table.insert("name", value(display_name));
+                            c_table.insert("wire_api", value("responses"));
+                            c_table.insert("requires_openai_auth", value(true));
+                            c_table.insert("base_url", value(proxy_url.to_string()));
+                            if let Some(m) = model {
+                                c_table.insert("model", value(m));
+                            }
+                        }
+                    }
+
+                    if is_apikey_fun {
+                        let features = doc
+                            .entry("features")
+                            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+                        if let Some(f_table) = features.as_table_mut() {
+                            f_table.insert("goals", value(true));
+                        }
+                    }
+                    content = doc.to_string();
+                }
+            }
+            CliApp::Gemini => {
+                if file.name == ".env" {
+                    let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+                    let mut found_url = false;
+                    let mut found_key = false;
+                    for line in lines.iter_mut() {
+                        if line.starts_with("GOOGLE_GEMINI_BASE_URL=") {
+                            *line = format!("GOOGLE_GEMINI_BASE_URL={}", proxy_url);
+                            found_url = true;
+                        } else if line.trim().starts_with("GEMINI_API_KEY=") {
+                            *line = format!("GEMINI_API_KEY={}", api_key);
+                            found_key = true;
+                        }
+                    }
+                    if !found_url {
+                        lines.push(format!("GOOGLE_GEMINI_BASE_URL={}", proxy_url));
+                    }
+                    if !found_key {
+                        lines.push(format!("GEMINI_API_KEY={}", api_key));
+                    }
+                    if let Some(m) = model {
+                        let mut found_model = false;
+                        for line in lines.iter_mut() {
+                            if line.starts_with("GOOGLE_GEMINI_MODEL=") {
+                                *line = format!("GOOGLE_GEMINI_MODEL={}", m);
+                                found_model = true;
+                            }
+                        }
+                        if !found_model {
+                            lines.push(format!("GOOGLE_GEMINI_MODEL={}", m));
+                        }
+                    }
+                    content = lines.join("\n");
+                } else if file.name == "settings.json" || file.name == "config.json" {
+                    let mut json: Value =
+                        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}));
+                    if json.as_object().is_none() {
+                        json = serde_json::json!({});
+                    }
+                    let sec = json
+                        .as_object_mut()
+                        .unwrap()
+                        .entry("security")
+                        .or_insert(serde_json::json!({}));
+                    let auth = sec
+                        .as_object_mut()
+                        .unwrap()
+                        .entry("auth")
+                        .or_insert(serde_json::json!({}));
+                    if let Some(auth_obj) = auth.as_object_mut() {
+                        auth_obj.insert(
+                            "selectedType".to_string(),
+                            Value::String("gemini-api-key".to_string()),
+                        );
+                    }
+                    content = serde_json::to_string_pretty(&json).unwrap();
+                }
+            }
+            CliApp::OpenCode => {
+                if file.name == "config.json" {
+                    let mut json: Value =
+                        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}));
+                    if json.as_object().is_none() {
+                        json = serde_json::json!({});
+                    }
+                    let providers = json
+                        .as_object_mut()
+                        .unwrap()
+                        .entry("providers")
+                        .or_insert(serde_json::json!({}));
+                    let openai = providers
+                        .as_object_mut()
+                        .unwrap()
+                        .entry("openai")
+                        .or_insert(serde_json::json!({}));
+                    if let Some(openai_obj) = openai.as_object_mut() {
+                        openai_obj
+                            .insert("baseURL".to_string(), Value::String(proxy_url.to_string()));
+                        if !api_key.is_empty() {
+                            openai_obj
+                                .insert("apiKey".to_string(), Value::String(api_key.to_string()));
+                        }
+                    }
+                    content = serde_json::to_string_pretty(&json).unwrap();
+                }
+            }
+        }
+
+        // 使用临时文件原子写入
+        let tmp_path = file.path.with_extension("tmp");
+        fs::write(&tmp_path, &content).map_err(|e| format!("写入临时文件失败: {}", e))?;
+        fs::rename(&tmp_path, &file.path).map_err(|e| format!("重命名配置文件失败: {}", e))?;
+    }
+
+    Ok(())
+}
+
+// Tauri Commands
+
+pub async fn get_cli_sync_status(app_type: CliApp, proxy_url: String) -> Result<CliStatus, String> {
+    tokio::task::spawn_blocking(move || {
+        let (installed, version) = check_cli_installed(&app_type);
+        let (is_synced, has_backup, current_base_url) = if installed {
+            get_sync_status(&app_type, &proxy_url)
+        } else {
+            (false, false, None)
+        };
+
+        Ok(CliStatus {
+            installed,
+            version,
+            is_synced,
+            has_backup,
+            current_base_url,
+            files: app_type
+                .config_files()
+                .into_iter()
+                .map(|f| f.name)
+                .collect(),
+        })
+    })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
+}
+
+pub async fn execute_cli_sync(
+    app_type: CliApp,
+    proxy_url: String,
+    api_key: String,
+    model: Option<String>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        sync_config(&app_type, &proxy_url, &api_key, model.as_deref())
+    })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
+}
+
+pub async fn execute_cli_restore(app_type: CliApp) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let files = app_type.config_files();
+        let mut restored_count = 0;
+
+        // 尝试从备份恢复
+        for file in &files {
+            let backup_path = file
+                .path
+                .with_file_name(format!("{}.antigravity.bak", file.name));
+            if backup_path.exists() {
+                // 还原：覆盖原文件
+                if let Err(e) = fs::rename(&backup_path, &file.path) {
+                    return Err(format!("恢复备份失败 {}: {}", file.name, e));
+                }
+                restored_count += 1;
+            }
+        }
+
+        if restored_count > 0 {
+            // 如果成功恢复了至少一个备份，就认为是恢复成功
+            return Ok(());
+        }
+
+        // 如果没有备份，则执行原来的逻辑：恢复为默认配置
+        let default_url = app_type.default_url();
+        // 恢复默认时清空 API Key，让用户重新授权或使用官方 Key
+        sync_config(&app_type, default_url, "", None)
+    })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
+}
+
+pub async fn get_cli_config_content(
+    app_type: CliApp,
+    file_name: Option<String>,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let files = app_type.config_files();
+        let file = if let Some(name) = file_name {
+            files
+                .into_iter()
+                .find(|f| f.name == name)
+                .ok_or("找不到指定的文件".to_string())?
+        } else {
+            files
+                .into_iter()
+                .next()
+                .ok_or("找不到配置文件".to_string())?
+        };
+
+        if !file.path.exists() {
+            return Err("配置文件不存在".to_string());
+        }
+        fs::read_to_string(&file.path).map_err(|e| format!("读取配置文件失败: {}", e))
+    })
+    .await
+    .unwrap_or_else(|_| Err("Task panicked".to_string()))
+}
