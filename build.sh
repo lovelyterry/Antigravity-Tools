@@ -82,8 +82,15 @@ install_dependencies() {
     # 1. 识别包管理器并安装系统依赖
     if command -v apt-get &>/dev/null; then
         echo -e "${YELLOW}检测到 Debian / Ubuntu 系统，通过 apt-get 安装系统依赖...${NC}"
-        $SUDO apt-get update -y
-        $SUDO apt-get install -y build-essential cmake clang libclang-dev pkg-config libssl-dev curl wget
+        # 禁用交互提示与 needrestart 服务重启 (避免弹出 TUI 窗口或重启运行中的系统服务)
+        export DEBIAN_FRONTEND=noninteractive
+        export NEEDRESTART_MODE=l
+        export NEEDRESTART_SUSPEND=1
+        $SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 apt-get update -y
+        $SUDO env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l NEEDRESTART_SUSPEND=1 apt-get install -y \
+            -o Dpkg::Options::="--force-confdef" \
+            -o Dpkg::Options::="--force-confold" \
+            build-essential cmake clang libclang-dev pkg-config libssl-dev curl wget
     elif command -v pacman &>/dev/null; then
         echo -e "${YELLOW}检测到 Arch Linux 系统，通过 pacman 安装系统依赖...${NC}"
         $SUDO pacman -S --needed --noconfirm base-devel cmake clang openssl pkgconf curl wget
