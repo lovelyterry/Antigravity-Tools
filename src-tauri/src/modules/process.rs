@@ -523,11 +523,12 @@ pub fn sweep_orphan_language_servers() {
 }
 
 /// Close Antigravity processes
-pub fn close_antigravity(_timeout_secs: u64, target_ide: Option<&str>) -> Result<(), String> {
+pub fn close_antigravity(timeout_secs: u64, target_ide: Option<&str>) -> Result<(), String> {
     crate::modules::logger::log_info(&format!("Closing Antigravity ({:?})...", target_ide));
 
     #[cfg(target_os = "windows")]
     {
+        let _ = timeout_secs;
         // Windows: Precise kill by PID to support multiple versions or custom filenames
         let pids = get_antigravity_pids(target_ide);
         if !pids.is_empty() {

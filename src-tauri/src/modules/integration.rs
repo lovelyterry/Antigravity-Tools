@@ -1,4 +1,5 @@
 use crate::models::Account;
+use std::process::Command;
 
 pub trait SystemIntegration: Send + Sync {
     /// 当切换账号时执行的系统层操作（如杀进程、写入文件、注入数据库）
