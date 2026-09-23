@@ -153,17 +153,13 @@ pub async fn internal_start_proxy_service(
     let active_accounts = token_manager.load_accounts().await.unwrap_or(0);
 
     if active_accounts == 0 {
-        let zai_enabled = config.zai.enabled
-            && !matches!(config.zai.dispatch_mode, crate::proxy::ZaiDispatchMode::Off);
-        if !zai_enabled {
-            tracing::warn!("沒有可用賬號，反代邏輯將暫停，請通過管理界面添加。");
-            return Ok(ProxyStatus {
-                running: false,
-                port: config.port,
-                base_url: format!("http://127.0.0.1:{}", config.port),
-                active_accounts: 0,
-            });
-        }
+        tracing::warn!("沒有可用賬號，反代邏輯將暫停，請通過管理界面添加。");
+        return Ok(ProxyStatus {
+            running: false,
+            port: config.port,
+            base_url: format!("http://127.0.0.1:{}", config.port),
+            active_accounts: 0,
+        });
     }
 
     let mut instance_lock = state.instance.write().await;
@@ -243,9 +239,7 @@ pub async fn ensure_admin_server(
         config.request_timeout,
         config.upstream_proxy.clone(),
         config.user_agent_override.clone(),
-        crate::proxy::ProxySecurityConfig::from_proxy_config(&config),
-        config.zai.clone(),
-        monitor,
+        crate::proxy::ProxySecurityConfig::from_proxy_config(&config),        monitor,
         config.experimental.clone(),
         config.debug_logging.clone(),
         integration.clone(),

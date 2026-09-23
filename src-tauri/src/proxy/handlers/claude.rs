@@ -26,7 +26,7 @@ use crate::proxy::model_specs;
 use crate::proxy::server::AppState;
 use crate::proxy::upstream::client::mask_email;
 use axum::http::HeaderMap;
-use std::sync::{atomic::Ordering, Arc}; // [NEW]
+use std::sync::Arc; // [NEW]
 
 // ===== Task #6: OpenCode variants thinking config mapping =====
 // Helper structs for parsing thinking hints from raw JSON
@@ -447,12 +447,6 @@ pub async fn handle_messages(
         );
     }
 
-    // Decide whether this request should be handled by z.ai (Anthropic passthrough) or the existing Google flow.
-    let zai = state.zai.read().await.clone();
-    let zai_enabled =
-        zai.enabled && !matches!(zai.dispatch_mode, crate::proxy::ZaiDispatchMode::Off);
-    let google_accounts = state.token_manager.len();
-
     // [CRITICAL REFACTOR] 优先解析请求以获取模型信息(用于智能兜底判断)
     let mut request: crate::proxy::mappers::claude::models::ClaudeRequest =
         match serde_json::from_value(body.clone()) {
@@ -542,51 +536,6 @@ pub async fn handle_messages(
         .await;
     }
 
-    // [Issue #703 Fix] 智能兜底判断:需要归一化模型名用于配额保护检查
-    let normalized_model =
-        crate::proxy::common::model_mapping::normalize_to_standard_id(&request.model)
-            .unwrap_or_else(|| request.model.clone());
-
-    let use_zai = if !zai_enabled {
-        false
-    } else {
-        match zai.dispatch_mode {
-            crate::proxy::ZaiDispatchMode::Off => false,
-            crate::proxy::ZaiDispatchMode::Exclusive => true,
-            crate::proxy::ZaiDispatchMode::Fallback => {
-                if google_accounts == 0 {
-                    // 没有 Google 账号,使用兜底
-                    tracing::info!(
-                        "[{}] No Google accounts available, using fallback provider",
-                        trace_id
-                    );
-                    true
-                } else {
-                    // [Issue #703 Fix] 智能判断:检查是否有可用的 Google 账号
-                    let has_available = state
-                        .token_manager
-                        .has_available_account("claude", &normalized_model)
-                        .await;
-                    if !has_available {
-                        tracing::info!(
-                            "[{}] All Google accounts unavailable (rate-limited or quota-protected for {}), using fallback provider",
-                            trace_id,
-                            request.model
-                        );
-                    }
-                    !has_available
-                }
-            }
-            crate::proxy::ZaiDispatchMode::Pooled => {
-                // Treat z.ai as exactly one extra slot in the pool.
-                // No strict guarantees: it may get 0 requests if selection never hits.
-                let total = google_accounts.saturating_add(1).max(1);
-                let slot = state.provider_rr.fetch_add(1, Ordering::Relaxed) % total;
-                slot == 0
-            }
-        }
-    };
-
     // [Stage 1 Timing] 初始会话清洗计时
     let clean_start = std::time::Instant::now();
 
@@ -599,9 +548,7 @@ pub async fn handle_messages(
     merge_consecutive_messages(&mut request.messages);
 
     // Get model family for signature validation
-    let target_family = if use_zai {
-        Some("claude")
-    } else {
+    let target_family = {
         let mapped_model =
             crate::proxy::common::model_mapping::map_claude_model_to_gemini(&request.model);
         if mapped_model.contains("gemini") {
@@ -685,33 +632,6 @@ pub async fn handle_messages(
         return create_warmup_response(&request, request.stream);
     }
 
-    if use_zai {
-        // 重新序列化修复后的请求体
-        let mut new_body = match serde_json::to_value(&request) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!("Failed to serialize fixed request for z.ai: {}", e);
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-            }
-        };
-
-        // Inject cache_control into the XML summary message if it is a Forked session
-        inject_cache_control_to_forked_summary(&mut new_body);
-
-        if let Some(ref recorder) = upstream_recorder {
-            recorder.set_value(&new_body);
-        }
-
-        return crate::proxy::providers::zai_anthropic::forward_anthropic_json(
-            &state,
-            axum::http::Method::POST,
-            "/v1/messages",
-            &headers,
-            new_body,
-            request.messages.len(), // [NEW v4.0.0] Pass message count
-        )
-        .await;
-    }
 
     // Google Flow 继续使用 request 对象
     // (后续代码不需要再次 filter_invalid_thinking_blocks)
@@ -2115,26 +2035,10 @@ pub async fn handle_list_models(State(state): State<AppState>) -> impl IntoRespo
 
 /// 计算 tokens (占位符)
 pub async fn handle_count_tokens(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
+    Json(_body): Json<Value>,
 ) -> Response {
-    let zai = state.zai.read().await.clone();
-    let zai_enabled =
-        zai.enabled && !matches!(zai.dispatch_mode, crate::proxy::ZaiDispatchMode::Off);
-
-    if zai_enabled {
-        return crate::proxy::providers::zai_anthropic::forward_anthropic_json(
-            &state,
-            axum::http::Method::POST,
-            "/v1/messages/count_tokens",
-            &headers,
-            body,
-            0, // [NEW v4.0.0] Tokens count doesn't need rewind detection
-        )
-        .await;
-    }
-
     Json(json!({
         "input_tokens": 0,
         "output_tokens": 0
@@ -2691,6 +2595,7 @@ async fn try_compress_with_summary(
 }
 
 /// Injects cache_control ephemeral trigger to first message's content block if it's the XML summary
+#[cfg(test)]
 fn inject_cache_control_to_forked_summary(body: &mut serde_json::Value) {
     if let Some(messages) = body.get_mut("messages").and_then(|m| m.as_array_mut()) {
         if !messages.is_empty() {

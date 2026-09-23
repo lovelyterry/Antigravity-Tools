@@ -18,7 +18,6 @@ export interface ProxyConfig {
     log_retention?: LogRetentionConfig;
     debug_logging?: DebugLoggingConfig;
     upstream_proxy: UpstreamProxyConfig;
-    zai?: ZaiConfig;
     scheduling?: StickySessionConfig;
     experimental?: ExperimentalConfig;
     user_agent_override?: string;

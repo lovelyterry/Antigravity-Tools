@@ -94,11 +94,7 @@ pub struct AppState {
     pub thought_signature_map: Arc<tokio::sync::Mutex<std::collections::HashMap<String, String>>>, // 思维链签名映射 (ID -> Signature)
     #[allow(dead_code)]
     pub upstream_proxy: Arc<tokio::sync::RwLock<crate::proxy::config::UpstreamProxyConfig>>,
-    pub upstream: Arc<crate::proxy::upstream::client::UpstreamClient>,
-    pub zai: Arc<RwLock<crate::proxy::ZaiConfig>>,
-    pub provider_rr: Arc<AtomicUsize>,
-    pub zai_vision_mcp: Arc<crate::proxy::zai_vision_mcp::ZaiVisionMcpState>,
-    pub monitor: Arc<crate::proxy::monitor::ProxyMonitor>,
+    pub upstream: Arc<crate::proxy::upstream::client::UpstreamClient>,    pub provider_rr: Arc<AtomicUsize>,    pub monitor: Arc<crate::proxy::monitor::ProxyMonitor>,
     pub experimental: Arc<RwLock<crate::proxy::config::ExperimentalConfig>>,
     pub debug_logging: Arc<RwLock<crate::proxy::config::DebugLoggingConfig>>,
     pub switching: Arc<RwLock<bool>>, // [NEW] 账号切换状态，用于防止并发切换
@@ -414,9 +410,7 @@ pub struct AxumServer {
     custom_mapping: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
     proxy_state: Arc<tokio::sync::RwLock<crate::proxy::config::UpstreamProxyConfig>>,
     upstream: Arc<crate::proxy::upstream::client::UpstreamClient>,
-    security_state: Arc<RwLock<crate::proxy::ProxySecurityConfig>>,
-    zai_state: Arc<RwLock<crate::proxy::ZaiConfig>>,
-    experimental: Arc<RwLock<crate::proxy::config::ExperimentalConfig>>,
+    security_state: Arc<RwLock<crate::proxy::ProxySecurityConfig>>,    experimental: Arc<RwLock<crate::proxy::config::ExperimentalConfig>>,
     debug_logging: Arc<RwLock<crate::proxy::config::DebugLoggingConfig>>,
     pub is_running: Arc<RwLock<bool>>,
     pub token_manager: Arc<TokenManager>, // [NEW] 暴露出 TokenManager 供反代服务复用
@@ -472,11 +466,6 @@ impl AxumServer {
         tracing::info!("反代服务安全配置已热更新");
     }
 
-    pub async fn update_zai(&self, config: &crate::proxy::config::ProxyConfig) {
-        let mut zai = self.zai_state.write().await;
-        *zai = config.zai.clone();
-        tracing::info!("z.ai 配置已热更新");
-    }
 
     pub async fn update_experimental(&self, config: &crate::proxy::config::ProxyConfig) {
         let mut exp = self.experimental.write().await;
@@ -512,9 +501,7 @@ impl AxumServer {
         request_timeout: u64,
         upstream_proxy: crate::proxy::config::UpstreamProxyConfig,
         user_agent_override: Option<String>,
-        security_config: crate::proxy::ProxySecurityConfig,
-        zai_config: crate::proxy::ZaiConfig,
-        monitor: Arc<crate::proxy::monitor::ProxyMonitor>,
+        security_config: crate::proxy::ProxySecurityConfig,        monitor: Arc<crate::proxy::monitor::ProxyMonitor>,
         experimental_config: crate::proxy::config::ExperimentalConfig,
         debug_logging: crate::proxy::config::DebugLoggingConfig,
 
@@ -531,11 +518,7 @@ impl AxumServer {
 
         // Start health check loop
         proxy_pool_manager.clone().start_health_check_loop();
-        let security_state = Arc::new(RwLock::new(security_config));
-        let zai_state = Arc::new(RwLock::new(zai_config));
-        let provider_rr = Arc::new(AtomicUsize::new(0));
-        let zai_vision_mcp_state = Arc::new(crate::proxy::zai_vision_mcp::ZaiVisionMcpState::new());
-        let experimental_state = Arc::new(RwLock::new(experimental_config));
+        let security_state = Arc::new(RwLock::new(security_config));        let provider_rr = Arc::new(AtomicUsize::new(0));        let experimental_state = Arc::new(RwLock::new(experimental_config));
         let debug_logging_state = Arc::new(RwLock::new(debug_logging));
         let is_running_state = Arc::new(RwLock::new(false));
 
@@ -572,11 +555,7 @@ impl AxumServer {
                     u.set_user_agent_override(user_agent_override).await;
                 }
                 u
-            },
-            zai: zai_state.clone(),
-            provider_rr: provider_rr.clone(),
-            zai_vision_mcp: zai_vision_mcp_state,
-            monitor: monitor.clone(),
+            },            provider_rr: provider_rr.clone(),            monitor: monitor.clone(),
             experimental: experimental_state.clone(),
             debug_logging: debug_logging_state.clone(),
             switching: Arc::new(RwLock::new(false)),
@@ -652,10 +631,6 @@ impl AxumServer {
                 any(handlers::mcp::handle_web_search_prime),
             )
             .route("/mcp/web_reader/mcp", any(handlers::mcp::handle_web_reader))
-            .route(
-                "/mcp/zai-mcp-server/mcp",
-                any(handlers::mcp::handle_zai_mcp_server),
-            )
             // Gemini Protocol (Native)
             .route("/v1beta/models", get(handlers::gemini::handle_list_models))
             // Handle both GET (get info) and POST (generateContent with colon) at the same route
@@ -828,7 +803,6 @@ impl AxumServer {
                 "/accounts/oauth/client",
                 get(admin_get_active_oauth_client).post(admin_set_active_oauth_client),
             )
-            .route("/zai/models/fetch", post(admin_fetch_zai_models))
             .route(
                 "/proxy/monitor/toggle",
                 post(admin_set_proxy_monitor_enabled),
@@ -1039,9 +1013,7 @@ impl AxumServer {
             custom_mapping: custom_mapping_state.clone(),
             proxy_state,
             upstream: state.upstream.clone(),
-            security_state,
-            zai_state,
-            experimental: experimental_state.clone(),
+            security_state,            experimental: experimental_state.clone(),
             debug_logging: debug_logging_state.clone(),
             is_running: is_running_state,
             token_manager: token_manager.clone(),
@@ -1820,10 +1792,7 @@ async fn admin_save_config(
     }
 
     // 更新 z.ai 配置
-    {
-        let mut zai = state.zai.write().await;
-        *zai = new_config.clone().proxy.zai;
-    }
+    {    }
 
     // 更新实验性配置
     {
@@ -2111,73 +2080,6 @@ async fn admin_set_preferred_account(
         .set_preferred_account(payload.account_id)
         .await;
     StatusCode::OK
-}
-
-async fn admin_fetch_zai_models(
-    Path(_id): Path<String>,
-    Json(payload): Json<serde_json::Value>, // 复用前端传来的参数
-) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    // 这里简单实现，如果需要更复杂的抓取逻辑，可以调用 zai 模块
-    // 目前前端 fetch_zai_models 本质上也是一个工具函数，
-    // 我们可以在后端通过 reqwest 代理抓取。
-    let zai_config = payload.get("zai").ok_or_else(|| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: "Missing zai config".to_string(),
-            }),
-        )
-    })?;
-
-    let api_key = zai_config
-        .get("api_key")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let base_url = zai_config
-        .get("base_url")
-        .and_then(|v| v.as_str())
-        .unwrap_or("https://api.z.ai");
-
-    // 尝试从 z.ai 获取模型
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("{}/v1/models", base_url))
-        .header("Authorization", format!("Bearer {}", api_key))
-        .send()
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: e.to_string(),
-                }),
-            )
-        })?;
-
-    let data: serde_json::Value = resp.json().await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
-
-    // 提取模型 ID 列表
-    let models = data
-        .get("data")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|m| {
-                    m.get("id")
-                        .and_then(|id| id.as_str().map(|s| s.to_string()))
-                })
-                .collect::<Vec<String>>()
-        })
-        .unwrap_or_default();
-
-    Ok(Json(models))
 }
 
 async fn admin_set_proxy_monitor_enabled(
