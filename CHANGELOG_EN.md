@@ -3,6 +3,157 @@
 > Complete version history for Antigravity Tools. Return to project home at [README_EN.md](README_EN.md).
 
 *   **Version History**:
+    *   **v4.7.14-beta (2026-09-22)**:
+        -   **[Full-Protocol Tool & Argument 100% Pure Passthrough] Eliminate Agent-Client Tool Call Failures Caused by Legacy Truncation and Opaque Rewriting (PR #3504)**:
+            -   **Lossless Tool & Argument Egress**: Removed tool-name mapping, argument alias rewriting, and erroneous command injection across the OpenAI, Anthropic Claude, and Google Gemini adapters, so tool names and arguments reach the upstream with the client's original semantics intact — resolving the erratic tool call errors reported by OpenClaw and other agent clients due to legacy truncation and rewriting.
+            -   **Zero-Intrusion Tool Descriptions**: Removed write-based injection into `description` during tool schema validation; description fields now pass through 100% unmodified.
+            -   **Uncompressed Tool Results**: Removed the tool output compressor and patch error folding, so tool execution results are returned verbatim and in full.
+            -   **System Instruction Absolute Freeze**: Removed aggressive regex freezing of dates, timezones, working paths, and UUIDs in the System Prompt; mid-stream dynamic messages are now faithfully demoted into user turns via `<system-reminder>`.
+            -   **Security Guardrails Preserved**: Retained Codex identity normalization and high-risk pseudo-header stripping, so WAF mitigation remains intact.
+            -   **Dead Code Excised**: Removed the unreferenced `ToolAdapter` / `PencilAdapter` architecture and 700+ lines of `apply_patch` diagnostics, netting 3,300+ lines of redundant code.
+        -   **[Release & CI Discipline Codified] End-to-End Safe Pre-release Pipeline (PR #3504)**:
+            -   **Automatic Pre-release Isolation**: `release.yml` now detects pre-release tags; any tag containing `-` (`-beta` / `-cleaned` / `-alpha` / `-rc`) is marked as a Pre-release and excluded from Latest, so pre-release builds are never delivered to stable users via `releases/latest/download/updater.json`.
+            -   **CI Gates & Release Pre-flight**: `AGENTS.md` now documents the CI-parity pre-flight command list and the pre-tag check requirement; `docs/RELEASE_GUIDE.md` was condensed and extended with pre-release and branch-tagging guidance.
+
+    *   **v4.7.13 (2026-09-22)**:
+        -   **[Support "Lightweight Mode" for Minimized Background RAM Footprint] Destroy & Release WebView Renderer on Close/Minimize to Tray (Fixes #3502)**:
+            -   **On-Demand Destruction & Drastic RAM Reduction**: Supports explicitly destroying the webview rendering process upon closing or minimizing to the tray (`enter_lightweight_mode`), while core Rust services (reverse proxy gateway, 7-day smart warmup, quota monitor, circuit breaker) remain 100% active in Tokio runtime. Background RAM drops from ~160MB-250MB down to ~30MB-35MB.
+            -   **Seamless Self-Healing & Dynamic Reconstruction**: Rebuilding and awakening the main window (`exit_lightweight_mode`) seamlessly on tray icon left-click, tray menu "Show Main Window", or duplicate application launcher invocations (`tauri_plugin_single_instance`), restoring saved window geometry and native Win32 taskbar icons.
+            -   **Dual-End Toggle & i18n Synchronization**: Exposed directly as an interactive `CheckMenuItem` in the system tray menu and as a configuration toggle card in "Settings -> General", localized for all supported languages.
+        -   **[Client Process Management & Auto-Relaunch Hardening] Eliminate Intermittent "open: unrecognized option '--standalone'" Dialogs and Relaunch Failures on Account Switching (Fixes #3499, #3501, Thanks to @Terryli246)**:
+            -   **Engine Process Snapshot Exclusion & Source Isolation**: Explicitly filters out internal language server engine processes (`language_server`) and engine arguments (`--standalone`, `--override_ide_name`, `--subclient_type`) in `get_process_info` and `is_helper_process`, preventing hash-map process iteration from inadvertently latching onto backend worker processes.
+            -   **Cross-Platform Startup Argument Sanitization**: Introduced `sanitize_restart_args` pipeline to strip engine-internal parameters, preventing GUI client launch failures or accidental headless worker spawning on Windows and Linux.
+            -   **macOS `open` Standard Argument Conformance**: Normalized macOS `open` command invocation by strictly passing application arguments behind the `--args` flag, eliminating command parsing failures (`Startup failed: open: unrecognized option ...`) caused by unrecognized options.
+        -   **[Account Quota Smart Warmup & Countdown Fix] Fix Gemini Warmup Omission, Traffic Logs Missing Gemini Requests, and Stalled Countdown Timers (Fixes #3500)**:
+            -   **Uninitialized Weekly Window Cold-Start Unlocked**: Resolved the deadlock where unactivated Gemini weekly quota buckets (having `remaining_fraction >= 1.0` but empty `reset_time` before the first weekly request) were silently skipped by the scheduler; added automatic cold-start warmup to activate Google's upstream 7-day quota timer.
+            -   **Multi-Window Identifier Support & Monitored Model Linking**: Extended weekly bucket recognition to support `7d` window identifiers, and dynamically linked model selection with user-configured `monitored_models` in settings.
+        -   **[Traffic Log & Monitoring Optimization] Filter High-Frequency Health Checks by Default to Prevent Log Flooding and Database Bloat (Fixes #3498)**:
+            -   **Intelligent Suppression for Successful Health Probes**: Intercepts `/health`, `/healthz`, and `/api/health` probes in `monitor_middleware`. When probes return successful statuses (2xx), `ProxyRequestLog` generation and SQLite disk persistence are bypassed by default, eliminating thousands of 200 GET `/health` entries generated every 15-30s in Docker, K8s, or cloud monitoring environments.
+            -   **Preserved Diagnostic Telemetry**: Any non-2xx responses (e.g. 503 Service Unavailable, 500) continue to be recorded normally in the traffic logs for rapid fault isolation.
+            -   **Flexible Environment Override**: Added `ABV_LOG_HEALTH_CHECKS=true/1` environment variable flag to allow full probe telemetry logging when strict auditing is needed.
+
+    *   **v4.7.12 (2026-09-21)**:
+        -   **[Cross-Model Thinking Signature Fallback & Retroactive Cache Purification] Eliminate 400 Validation Interceptions & 503 Deadlocks on Model Switching (PR #3496, Fixes #3494)**:
+            -   **Inbound Pipeline Heterogeneous Signature Guard**: Enforces protocol-agnostic signature verification in `InboundThinkingPipeline`. When detecting incompatible foreign thinking signatures across model switches (e.g. Claude to Gemini), automatically down-ranks them to standard sentinels (`skip_thought_signature_validator`) and purges dirty signatures from `functionCall` parts, stopping HTTP 400 validation failures before egress.
+            -   **Targeted Cache & Database Purification**: During retries and model handoffs, `purge_foreign_signatures_for_session_with_model` cleanly strips corrupted signatures from memory and SQLite (`thinking_records`) while preserving pure thought text and healthy history turns.
+            -   **Clean Text Turn Decoupling**: Plain text turns strictly omit sentinels to guarantee clean context across multi-turn reasoning workflows.
+        -   **[UTF-8 Character Boundary Truncation Rust Panic Elimination] (PR #3496, Fixes #3493)**:
+            -   **Safe Multi-Byte Alignment Infrastructure**: Completely resolved Rust thread panics (`end byte index 57 is not a char boundary`) caused by raw byte slicing `[..57]` inside multi-byte characters in `normalize_and_sanitize_tool_args`. Introduced `safe_truncate_str` and `safe_truncate_chars` in `common_utils.rs` to automatically rewind to valid UTF-8 boundaries.
+            -   **Full Codebase Audit**: Hardened raw byte slices across `upstream/client.rs`, `tool_result_compressor.rs`, `payload_audit.rs`, and `claude/streaming.rs`, accompanied by dedicated multi-byte regression tests.
+        -   **[400/429/503 False Positive Throttling Elimination & Flash Adaptive Routing] (PR #3496, Fixes #3468)**:
+            -   **Flash 404 Lockout Remediation & Tiered Routing**: Overhauled routing for unadorned `-flash` models; Gemini 3.5+ flash models are adaptively directed to tiered variants, dynamically scaling between low, medium, and high thinking effort.
+            -   **Eliminate 404/500/503 Self-Lockout**: Removed faulty 404 account cooldown logic and passed through raw upstream diagnostics. Established `UpstreamClassification` in `pipeline/policy.rs` for unified pipeline arbitration.
+            -   **Tool Call Command Restoration**: Restored `command` parameter sanitization logic to prevent premature parameter stripping and ensure lossless tool invocation semantics.
+        -   **[Dashboard Account Quota Real-Time Updates & Health Matrix Refactor] (PR #3496, Fixes #3492, #3495)**:
+            -   **Real-Time Selected Account Quota**: Overhauled Dashboard health array and productivity metrics, defaulting to selected active account quotas with one-click toggling for all accounts.
+            -   **High-Contrast Pill Selector & Async Scheduling**: Added dual-state pill controllers across 12 languages and integrated React `startTransition` to eliminate UI switching latency.
+            -   **Account Management Crash Hardening (Fixes #3495)**: Added null-safe fallbacks (`group.buckets || []`), aligned TypeScript contracts, and added Rust `#[serde(default)]` to resolve `TypeError: Cannot read properties of null (reading 'filter')`.
+        -   **[Log Viewer Virtual Scroll Precision & Non-Streaming Thinking Capture] (PR #3496)**:
+            -   **Geometric Offset Jump**: Corrected text wrap search offsets in the virtualized log viewer using physical geometric differentials.
+            -   **Claude Non-Streaming Signatures**: Resolved missing thinking signatures in Claude non-streaming responses, and added Excel-style draggable column widths to the traffic monitor table.
+        -   **[One-Click Atomic Version Bumper & Release SOP] (PR #3496)**:
+            -   **11-File Atomic Synchronization**: Added `scripts/bump-version.mjs` to atomically synchronize 11 configuration files with SemVer monotonicity checks, CRLF/LF adaptation, and headless Cargo.lock syncing, registered via `npm run bump`.
+            -   **Release SOP & Architectural Guidelines**: Authored `docs/RELEASE_GUIDE.md` for standard three-step releases and committed `AGENTS.md` architectural standards and mandatory formatting gates.
+
+    *   **v4.7.11 (2026-09-21)**:
+        -   **[Account Management & Quota Null-Safety Hardening] Fix TypeError: Cannot read properties of null (reading 'filter') Crash on Accounts Page (Fixes #3491)**:
+            -   **Defensive Quota Bucket Access**: Resolved crashes caused by direct `.filter()` / `.map()` / `.some()` invocations on `group.buckets` across `AccountCard`, `AccountTable`, `quotaDisplay`, `Dashboard`, and `AccountDetailsDialog` by adding optional chaining and fallback empty arrays (`group.buckets || []`), preventing unexpected application errors when inspecting legacy or incomplete quota snapshots.
+            -   **Frontend Contract Alignment**: Updated `QuotaGroup` interface in `types/account.ts` to reflect optional bucket arrays (`buckets?: QuotaBucket[]`), enforcing compile-time safety.
+            -   **Backend Deserialization Compatibility**: Added `#[serde(default)]` to `QuotaGroup.buckets` in Rust, ensuring accounts stored without buckets automatically deserialize into empty vectors without failure.
+    *   **v4.7.10 (2026-09-21)**:
+        -   **[OpenCode Support Multiple APIKEY.FUN Key Profiles & Atomic Disk Persistence] (PR #3490, Thanks to @Avlaak)**:
+            -   **Individual Profile Isolation**: Supports creating, updating, and deactivating dedicated OpenCode provider profiles for each APIKEY.FUN key, eliminating overwrites during multi-key usage while retaining legacy profile compatibility.
+            -   **Stable ID Derivation & Collision Handling**: Derives stable short IDs using SHA-256 with graceful fallback to full digest on collision, strictly rejecting unauthorized profile overwrite attempts.
+            -   **Model Caching & Stale Query Guard**: Caches model inventories per key and endpoint to ignore outdated query responses upon switching or clearing keys.
+            -   **Tauri & Authenticated Web Management Routes**: Exposes provider query and secure removal endpoints across both Tauri and Web management routes, preventing reserved provider tampering.
+            -   **Serialized Operations & Atomic Writes**: Serializes config operations, offloads I/O from async workers, and ensures atomic replacement via private temporary files and rollback cleanup.
+    *   **v4.7.9 (2026-09-21)**:
+        -   **[Gemini Egress Minimization & Single Signature Anchor Law] Eliminate 10MB Signatures Overflowing 1,048,576 Tokens and 400 Validation Interceptions (PR #3482)**:
+            -   **Root Cause Remediation**: Resolved upstream production crashes where multi-turn complex reasoning generated 300KB to 509KB Protobuf signatures, causing legacy 3-5x duplication across parts to amass 9.93MB in signatures (95.2% of payload), breaching the 1,048,576 token ceiling.
+            -   **Single Real Signature Anchor**: Enforces that only the first `functionCall` part exclusively carries the genuine cryptographic signature, while `thought` blocks remain clean text, eliminating dual mirror redundancy.
+            -   **Parallel Tool Sentinel Contract**: Subsequent parallel tool calls within the same turn are unified with the standard 32-byte `skip_thought_signature_validator` sentinel, satisfying Google AST validation rules while slashing per-turn signature volume by over 80%.
+            -   **Egress FunctionResponse Sanitization**: Completely strips signatures from client-returned `functionResponse` blocks to eliminate downstream fake signature pollution.
+        -   **[Claude Dual-Engine Thinking Signature Closed-Loop] Eradicate Field Required and Invalid Signature Errors (PR #3482)**:
+            -   **Anthropic Contract Alignment**: Strictly respects Anthropic's rule that signatures belong exclusively in leading `thought` blocks (`messages[x].content[0].signature`); tool calls never carry signatures nor accept fake sentinels.
+            -   **Zero Dummy Thought Injection**: For non-thinking turns (rapid consecutive tool executions or direct answers), gateway strictly avoids injecting empty placeholder thinking blocks, eradicating `messages.x.content.0.thinking.signature: Field required`.
+            -   **Three-State State Machine**: Ingests and persists client-provided valid signatures; hydrates from store when client compresses history; and safely omits thinking blocks when no thinking was generated.
+            -   **Google Vertex Protobuf Normalization**: Transparently wraps incoming Claude ASCII signatures into Base64 format (`RXU4...`) and restores outgoing streams to raw ASCII for downstream clients.
+        -   **[Weekly Quota Sustained Circuit Breaking & Cycle Token Metering] (PR #3482, Fixes #3480, #3477, Merges #3484)**:
+            -   **Bucket Isolation & Hard Enforcement**: Decouples weekly quota tracking from temporary 429 limits, treating zero-quota depletion as a system-level hard constraint.
+            -   **Later Outstanding Deadline Alignment**: Reconciles dual-depleted quotas to the latest reset timestamp, preventing premature rotation loops.
+            -   **Weekly Token Usage Metering**: Displays exact cycle token consumption beneath each account card in compact `K/M/B` format (e.g. `206.99M`).
+        -   **[LAN and Public IPv6 / IPv4 Dual-Stack Listening] (PR #3482)**:
+            -   **Dual-Stack Wildcard Binding**: Binds `[::]:port` with `IPV6_V6ONLY` disabled to support public IPv6 DDNS (AAAA records) access, fixing `Connection refused` defects on pure IPv6 networks.
+            -   **IPv6 CIDR Filtering & Localization**: Supports up to 128-bit subnet masks and updates all 12 localized interface languages.
+        -   **[OpenAI / Codex Agent Identity Normalization] (PR #3489, Thanks to @cuteyuchen)**:
+            -   **Generic Adaptive Regex**: Introduces precompiled `RE_CODEX_IDENTITY` regex to strip competing model declarations (`based on GPT-5/GPT-6` etc.) while preserving arbitrary agent descriptors, preventing upstream 429 WAF throttling.
+        -   **[Frontend Security & Process Lifecycle Hardening] (PR #3482, Fixes #3485, #3488, #3481)**:
+            -   Enforces URL protocol allowlists, OAuth postMessage origin validation, resolves Classic/IDE detection collisions, and secures cross-platform process spawning.
+    *   **v4.7.8 (2026-09-20)**:
+        -   **[Quota Display & Merging Logic Fix] Fix 5H Quota Erroneously Displaying Weekly Quota and Reset Time (PR #3479, Fixes #3477)**:
+            -   **Faithful Bucket Display**: Corrected multi-dimensional quota bucket blending so that 5H quota accurately reflects the rolling 5-hour window and hourly countdown unless weekly quota is completely depleted.
+            -   **Clear Depletion Circuit Breaker**: Only when the weekly quota reaches total exhaustion (`remaining_fraction <= 0.001`) does it lock to 0% and inherit the weekly reset countdown, avoiding 429 loops while eliminating normal 5H quota pollution.
+            -   **Unified View Behavior**: Aligned AccountCard grid view with table view using `getModelEffectiveQuota`.
+        -   **[Claude Protocol & Thinking Signature Fix] Fix Multi-Turn Tool Calling Thinking Block Invalid Signature Errors (PR #3479, Fixes #3478)**:
+            -   **Universal Claude Compatibility**: Generalized `common_utils::is_model_compatible` to support Claude 4/5 series and arbitrary variants, preventing valid signatures from being stripped.
+            -   **Trust Client Valid Signatures**: Directly accepts and transparently forwards valid client signatures while automatically indexing them into `ThinkingStore`.
+            -   **Forbid Fake Sentinel Injection**: Explicitly forbids injecting Gemini-specific `skip_thought_signature_validator` into Claude models to prevent Anthropic 400 validation errors.
+            -   **Byte-level Thinking Block Preservation**: Disallows `.trim()` on thoughts with valid signatures and skips thinking blocks in `PromptSanitizer` to maintain cryptographic hash integrity.
+        -   **[Monitor Logging & Telemetry Optimization] Compact Authoritative Response Payload Logging (PR #3479)**:
+            -   **Payload Normalization**: Unified monitor logs with informative compact payloads across all protocols and collected streaming events with authoritative signatures.
+    *   **v4.7.7 (2026-09-20)**:
+        -   **[Cache Optimization & Pipeline Refactor] Reconstruct Message Building for Dramatically Improved Cache Hit Retention (PR #3476)**:
+            -   **Absolute Top-level System Instruction Freezing**: Only leading continuous `system` messages populate `systemInstruction`; dynamically injected mid-conversation `system` messages are rewritten on the fly into `<system-reminder>` wrapped within adjacent `user` turns, completely preventing KV Cache collapse and sustaining 80% ~ 90%+ hit rates in multi-turn interactions.
+            -   **3D Orthogonal Session Isolation (Fixes #3467)**: Deterministic UUIDs derived from tenant identity, client session headers (`x-session-id`, `session-id`), query, and body are injected upstream, totally preventing cross-session pollution and thought bleeding across multi-user or concurrent sub-agent requests.
+        -   **[Responses Protocol & Thought Preservation] Fix Process Commentary & Thought Deletion in Tool Calls (PR #3476)**:
+            -   **Dual Preservation & Topological Ordering**: Thinking blocks are strictly prepended at the top, followed by process commentary text as separate text blocks preceding `tool_calls`, completely eliminating lost progress commentary or 400 schema validation errors caused by inverted tool placement.
+            -   **Historical Prefix Absolute Freezing**: In multi-turn Responses requests containing tool calls, previously committed thoughts and signatures are permanently frozen across all subsequent turns.
+        -   **[Thinking Chain Decoupling & Misalignment Prevention] Strict Separation Between Thought Content and Thought Signature (PR #3476)**:
+            -   **Signature Rule**: Plain-text turns without tool calls are assigned a sentinel signature placeholder and excluded from tool signature storage; tool signatures are strictly anchored to `tool_id`, eliminating cross-matching of multi-kilobyte text signatures to tool calls.
+            -   **Thought Text Rule**: Restores real thought text when present and pads with `...` when absent; completely decoupled so plain-text reasoning remains 100% visible even under sentinel signatures.
+        -   **[Gemini Tooling & Parameter Sanitization] Deterministic Tool ID Synthesis & Shell Argument Sanitization (PR #3476, Fixes #3474)**:
+            -   **Deterministic Tool ID Synthesis**: Synthesizes unique symmetrical `tool_id`s based on `canonical_json_hash` and causal anchors, paired with monotonic topological funnels to prevent phase shifts after context trimming.
+            -   **Shell Parameter Sanitization**: Strips `description` from terminal tool schemas sent upstream to eliminate command injection into descriptions, restoring them downstream; returns non-zero `exit 1` instead of fake `echo [OK]` on empty commands to prompt agent self-healing.
+        -   **[Storage Evolution & Internationalization] ThinkingStore Optimization, Clear Thinking Data & Request Log Sliding Window (PR #3476)**:
+            -   **One-click Thinking Store Purge**: Added a "Clear Thinking Store" button with double confirmation in Settings, clearing RAM cache and SQLite thinking data while strictly preserving all `request_logs`; fully localized across 12 languages (zh, zh-TW, en, ja, ko, es, pt, ru, ar, tr, vi, my).
+            -   **Safe Request Log Sliding Window**: Replaced the legacy 24h payload nullification with a FIFO capacity- and count-based sliding window eviction, preserving 100% full raw request/response bodies.
+            -   **SQLite Covering Indexes**: Added indexes for `primary_tool_id`, `session_key`, and `id` for microsecond-level point lookups and eviction.
+        -   **[System Resilience & Quota Guard] Weekly Quota Depletion Circuit Breaker & Headless Linux Keyring Fallback (PR #3476, Fixes #3472, Fixes #3473)**:
+            -   **Weekly Quota Circuit Breaker**: Accounts with depleted weekly quota (0%) are locked and excluded from rotation pools, ending recursive 429 retries.
+            -   **Linux Keyring Graceful Fallback**: Automatically falls back to local SQLite `state.vscdb` injection and `~/.gemini/oauth_creds.json` synchronization in headless environments lacking `secret-tool` or D-Bus.
+    *   **v4.7.6 (2026-09-18)**:
+        -   **[Official IDE Subscription Alignment & Authoritative Parsing] Architectural Subscription Refactor to Fix Free Accounts Misidentified as PRO (PR #3470, Fixes #3469)**:
+            -   **Align with Machine Identifier `paidTier.id`**: Tier extraction is now strictly prioritized by machine-readable `id` (`free-tier` / `g1-pro-tier` / `g1-ultra-tier`) rather than mutable text `name`, accurately handling internal codenames like `helium` (Ultra) and `starter` (Free).
+            -   **Complete Removal of Model Heuristic Fallback**: Verified that `fetchAvailableModels` serves identical static catalogs regardless of tier; completely eliminated model-based tier guessing in both backend and frontend, safely defaulting unrecognized values to `FREE`.
+            -   **Eliminate Stale Cache Lockup**: Removed the skip-check optimization in `fetch_quota_with_cache` to ensure authoritative `loadCodeAssist` calls on each refresh, allowing previously corrupted tiers on disk to self-heal.
+            -   **Unified Scheduling Priority & UI Badges**: Centrally routes proxy rotation through `models::quota::tier_priority`, mapping unknown tiers to standard low-priority Free tier; account dialog badges now use canonical labels.
+        -   **[Test Sandbox Isolation & Data Safety Hardening] Guard Against Test Data Directory Pointer Pollution**:
+            -   **Pointer Override via Environment Variable**: Added `ABV_DATA_DIR_POINTER_FILE` support to isolate tests in temporary sandboxes.
+            -   **Interrupt Recovery & Assert Real Pointer Unchanged**: Wrapped test migrations with unwind protection and strictly asserted that `~/.antigravity_tools_location` remains untouched, eliminating the risk of lost accounts upon aborted test runs.
+        -   **[Configuration & Command Compatibility] Fix Command Not Found on Proxy Settings Save (PR #3470)**:
+            -   **Frontend Refresh Command Alignment**: Corrected the post-save refresh invocation in `ApiProxy.tsx` from `get_config` to `load_config`, eliminating missing command warnings.
+            -   **Dual Command Compatibility**: Registered `get_config` as a compatibility alias for `load_config` across Tauri commands and HTTP mappings.
+        -   **[Desktop Proxy Service & Auto-Start Persistence] Fix Proxy Switch State Reset on Restart & Stale State Overwrite**:
+            -   **Backend Persistence Alignment**: Aligned desktop `start_proxy_service` and `stop_proxy_service` handlers with Web/Docker behavior by persisting `auto_start` directly into `gui_config.json`, ensuring the proxy service reliably auto-starts after application restart.
+            -   **Frontend State Synchronization**: Fixed `handleToggle` in `ApiProxy.tsx` to immediately update `auto_start` in local React state, preventing subsequent configuration saves or model mapping changes from overwriting `auto_start` with stale `false` state.
+    *   **v4.7.5 (2026-09-18)**:
+        -   **[Upstream WAF & Request Sanitization] Flawlessly Resolved Agent Client 404/429/503 Errors & Purged Pseudo-Headers (PR #3463, Fixes #3458, Fixes #3467, Fixes #3466, Fixes #3460, Fixes #3454, Fixes #3453)**:
+            -   **Outbound UA Normalization**: Upgraded outbound client User-Agent uniformly to `>= 4.3.0` to eliminate upstream WAF fingerprint blocking.
+            -   **PromptSanitizer Inbound Filter**: Intercepts and strips non-compliant pseudo-headers such as `*-billing` from payloads, completely resolving the root cause of Google WAF misclassifying requests as 429 and triggering cascading 503 account failures.
+        -   **[Deep Reasoning Control & Thinking Chain Preservation] Removed Poisonous 1,000-Token Budget, Unlocked 24,576/32,768 Reasoning Budgets (PR #3463)**:
+            -   **Eliminate Thought Truncation Collapse**: Empirical testing over 48 rounds verified that budgets `< 2048` (especially `1000`) caused Gemini 3.x to abort reasoning chains (reducing thought tokens to 0); completely purged hardcoded low budgets.
+            -   **Unleash Full Reasoning Potential**: Unlocked customizable reasoning budgets up to `24576` and `32768`, boosting thinking token generation by 130%–165% with full logical deduction trees; introduced decoupled gateway-authoritative vs client-controlled modes.
+        -   **[Traffic Log Virtualization & Physical Storage Eviction] DOM Virtual Scrolling & Sliding Window Eviction (PR #3463)**:
+            -   **Row-Level DOM Virtualization (@tanstack/react-virtual)**: Limits rendered DOM nodes to 40–50 viewport rows for massive multi-megabyte payloads, preventing browser freezing and crashes during payload inspection; implemented in-memory decoupled search with syntax-aware line tokenization.
+            -   **Physical Disk Cap & Sliding Window Eviction**: Replaced time-based retention with physical gigabyte-level bounds plus 30% sliding window pruning and defragmentation, preventing SQLite 1GB write lockups.
+        -   **[Load Balancing Failover & Session Deadlock Fix] Fast 429 Failover in Balance Mode & Sticky Session Cleansing (PR #3464)**:
+            -   **Disable In-Place GraceRetry in Balance Mode**: Under multi-account Balance or PerformanceFirst modes, 429 errors now trigger an immediate 50ms fast failover to rotate to healthy accounts.
+            -   **Break Session Sticky Deadlocks**: Unified invocation of `unbind_session_and_clear_last_used` on 429/529 errors across Claude, Gemini, and OpenAI handlers to unbind `session_id` and reset `last_used_account`.
+            -   **Extended Hard Quota Keywords**: Added `"credits"` to hard quota exhaustion signals to rotate accounts immediately upon credit expiration.
+        -   **[Native OS Experience & Installer Fixes] Windows COM Shortcut Healing & Clean NSIS Upgrades (PR #3463)**:
+            -   **Native Win32 COM Shortcut Healing**: Employs direct Win32 COM interfaces for silent shortcut icon recovery without antivirus false positives; refactored NSIS installer/uninstaller scripts to release stale process handles and eliminate file-in-use overwrite errors.
+            -   **Heal Legacy Account PRO Tiers**: Corrected `ineligibleTiers` misclassification, automatically inferring and backfilling missing PRO statuses from disk on startup without requiring re-login.
+            -   **Update Protocol Standardization & Proxy Support**: Restored standard update checks and added full HTTP / SOCKS5 proxy inheritance for version lookups and asset downloads.
     *   **v4.7.4 (2026-09-17)**:
         -   **[Unified Multi-Protocol Pipeline & Architecture Refactor] Introduced Unified Pipeline Engine to Standardize Four AI Protocols (PR #3459)**:
             -   **Four-Protocol Adapter Normalization**: Unified OpenAI Chat (`/v1/chat/completions`), Anthropic Claude (`/v1/messages`), OpenAI Responses (`/v1/responses`), and Google Gemini Native protocols; implemented modular `Inbound` sanitization and `Outbound` extraction/diffusion pipelines to eliminate friction caused by schema variances and metadata fragmentation across client libraries.

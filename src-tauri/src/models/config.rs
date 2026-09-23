@@ -29,6 +29,11 @@ pub struct AppConfig {
     pub circuit_breaker: CircuitBreakerConfig, // [NEW] Circuit breaker configuration
     #[serde(default)]
     pub hidden_menu_items: Vec<String>, // Hidden menu item path list
+#[serde(default)]
+    pub cloudflared: CloudflaredConfig, // [NEW] Cloudflared configuration
+    #[serde(default)]
+    pub lightweight_mode: bool, // [NEW] Lightweight mode: destroy webview on minimize/close to tray
+
 }
 
 /// Scheduled warmup configuration
@@ -147,7 +152,7 @@ pub struct CircuitBreakerConfig {
     #[serde(default = "default_backoff_steps")]
     pub backoff_steps: Vec<u64>,
 
-    /// Lock account until quota reset time when 5-hour rolling or weekly quota reaches 0
+    /// Optional 5h zero-quota lock; exhausted weekly quota always blocks scheduling.
     #[serde(default = "default_lock_on_zero_quota")]
     pub lock_on_zero_quota: bool,
 }
@@ -197,6 +202,9 @@ impl AppConfig {
             pinned_quota_models: PinnedQuotaModelsConfig::default(),
             circuit_breaker: CircuitBreakerConfig::default(),
             hidden_menu_items: Vec::new(),
+cloudflared: CloudflaredConfig::default(),
+            lightweight_mode: false,
+
         }
     }
 }

@@ -62,7 +62,10 @@ pub fn redact_header_value(name: &str, value: &str) -> String {
         return value.to_string();
     }
     let trimmed = value.trim();
-    if trimmed.len() >= 7 && trimmed[..7].eq_ignore_ascii_case("bearer ") {
+    if trimmed
+        .get(..7)
+        .map_or(false, |p| p.eq_ignore_ascii_case("bearer "))
+    {
         return "Bearer ***REDACTED***".to_string();
     }
     "***REDACTED***".to_string()
@@ -494,6 +497,11 @@ pub fn simplify_payload_json(value: &Value) -> Value {
         .or_else(|| value.get("usageMetadata"))
     {
         concise.insert("usageMetadata".into(), usage.clone());
+    }
+
+    // 9.5 耗时诊断指标 (_timing)
+    if let Some(timing) = inner.get("_timing").or_else(|| value.get("_timing")) {
+        concise.insert("_timing".into(), timing.clone());
     }
 
     // 10. Choices & Candidates

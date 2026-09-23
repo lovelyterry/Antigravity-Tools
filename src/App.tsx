@@ -12,7 +12,7 @@ import ThemeManager from './components/common/ThemeManager';
 import UserToken from './pages/UserToken';
 import { UpdateNotification } from './components/UpdateNotification';
 import DebugConsole from './components/debug/DebugConsole';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, startTransition } from 'react';
 import { useConfigStore } from './stores/useConfigStore';
 import { useTranslation } from 'react-i18next';
 import { request as invoke } from './utils/request';
@@ -67,16 +67,13 @@ function App() {
     loadConfig();
   }, [loadConfig]);
 
-  // Sync language from config
+  // Sync language from config (仅在不同步时通过 startTransition 非阻塞调度)
   useEffect(() => {
-    if (config?.language) {
-      i18n.changeLanguage(config.language);
-      // Support RTL
-      if (config.language === 'ar') {
-        document.documentElement.dir = 'rtl';
-      } else {
-        document.documentElement.dir = 'ltr';
-      }
+    if (config?.language && i18n.language !== config.language) {
+      startTransition(() => {
+        i18n.changeLanguage(config.language);
+      });
+      document.documentElement.dir = config.language === 'ar' ? 'rtl' : 'ltr';
     }
   }, [config?.language, i18n]);
 

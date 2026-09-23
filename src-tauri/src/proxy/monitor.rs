@@ -34,6 +34,8 @@ pub struct ProxyRequestLog {
     pub cached_tokens: Option<u32>,
     pub protocol: Option<String>, // 协议类型: "openai", "anthropic", "gemini"
     pub username: Option<String>, // User token username
+    #[serde(default)]
+    pub session_id: Option<String>, // 会话标识 (如 sess-xxx)
 }
 
 #[cfg(test)]
@@ -85,6 +87,7 @@ pub(crate) mod prompt_log_tests {
             stats: RwLock::new(ProxyStats::default()),
             max_logs: 2,
             enabled: Arc::new(AtomicBool::new(true)),
+capture_health_logs: Arc::new(AtomicBool::new(false)),
         };
         let log = sample_log("detail", 4096);
         let response = log.response_body.clone();
@@ -133,6 +136,7 @@ impl ProxyRequestLog {
             cached_tokens: self.cached_tokens,
             protocol: self.protocol.clone(),
             username: self.username.clone(),
+            session_id: self.session_id.clone(),
         }
     }
 }
@@ -236,6 +240,7 @@ pub struct ProxyMonitor {
     pub stats: RwLock<ProxyStats>,
     pub max_logs: usize,
     pub enabled: Arc<AtomicBool>,
+pub capture_health_logs: Arc<AtomicBool>,
 }
 
 impl ProxyMonitor {
@@ -333,6 +338,7 @@ impl ProxyMonitor {
             stats: RwLock::new(ProxyStats::default()),
             max_logs,
             enabled: Arc::new(AtomicBool::new(false)), // Default to disabled
+capture_health_logs: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -342,6 +348,14 @@ impl ProxyMonitor {
 
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn set_capture_health_logs(&self, enabled: bool) {
+        self.capture_health_logs.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn is_capture_health_logs(&self) -> bool {
+        self.capture_health_logs.load(Ordering::Relaxed)
     }
 
     pub async fn log_request(&self, log: ProxyRequestLog) {

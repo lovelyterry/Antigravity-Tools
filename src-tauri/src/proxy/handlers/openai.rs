@@ -916,11 +916,9 @@ fn convert_chat_response_to_responses(chat_response: &OpenAIResponse) -> Value {
     })
 }
 
-/// Visible Codex commentary is part of the local transcript, not Gemini
-/// conversation history. Codex omits output item IDs when it replays a task, so
-/// `phase=commentary` is the durable discriminator. The text-prefix fallback
-/// heals tasks written by builds that accidentally finalized a thought blob as
-/// a normal answer.
+/// 仅识别客户端本地私有展示项（如本地渲染的思考块），绝不误杀伴随工具调用的真实过程进度说明。
+/// 只有明确以 `msg_thought_` 为 ID 前缀或历史遗留以 `**Thinking**` 开头的消息才被视为 transcript-only。
+/// 真实的 `phase="commentary"` 消息包含正文说明，必须作为上下文历史保留以保证模型少样本进度输出范式。
 fn is_codex_transcript_only_assistant_message(item: &Value, text: &str) -> bool {
     if responses_input_item_type(item) != "message"
         || item.get("role").and_then(Value::as_str) != Some("assistant")
@@ -928,11 +926,9 @@ fn is_codex_transcript_only_assistant_message(item: &Value, text: &str) -> bool 
         return false;
     }
 
-    item.get("phase").and_then(Value::as_str) == Some("commentary")
-        || item
-            .get("id")
-            .and_then(Value::as_str)
-            .is_some_and(|id| id.starts_with(CODEX_VISIBLE_THOUGHT_MESSAGE_PREFIX))
+    item.get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| id.starts_with(CODEX_VISIBLE_THOUGHT_MESSAGE_PREFIX))
         || text.trim_start().starts_with("**Thinking**")
 }
 
@@ -1125,7 +1121,7 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
                     "call_id": "call_image",
                     "output": [
                         {"type": "input_text", "text": "image generated"},
-                        {"type": "input_image", "image_url": "data:image/png;base64,AQ=="}
+                        {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}
                     ]
                 }
             ]
@@ -1157,7 +1153,7 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
         );
         assert!(!function_response.to_string().contains("data:image/"));
         assert_eq!(inline_data["inlineData"]["mimeType"], "image/png");
-        assert_eq!(inline_data["inlineData"]["data"], "AQ==");
+        assert_eq!(inline_data["inlineData"]["data"], "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
     }
 
     #[test]
@@ -1466,7 +1462,7 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
         assert!(is_codex_transcript_only_assistant_message(
             &thought, "thinking"
         ));
-        assert!(is_codex_transcript_only_assistant_message(
+        assert!(!is_codex_transcript_only_assistant_message(
             &normal_commentary,
             "progress"
         ));
@@ -1478,6 +1474,66 @@ data: {"type":"response.failed","response":{"status":"failed","error":{"code":"u
             &clean_final,
             "done"
         ));
+    }
+
+    #[test]
+    fn test_codex_process_commentary_is_retained_in_request_messages() {
+        let input = json!({
+            "model": "gemini-2.5-pro",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "检查系统故障"}]
+                },
+                {
+                    "type": "message",
+                    "id": "msg_thought_123",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "private thought"}]
+                },
+                {
+                    "type": "message",
+                    "id": "msg_comm_123",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "概览显示 HTTP 502，接下来检查网关连接。"}]
+                },
+                {
+                    "type": "function_call",
+                    "id": "call_inspect",
+                    "name": "inspect_case",
+                    "arguments": "{\"case\":\"case_1\"}"
+                }
+            ]
+        });
+
+        let converted = convert_codex_to_openai_request(input);
+        let messages = converted["messages"].as_array().expect("messages array");
+
+        // 验证：user 消息存在
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "检查系统故障");
+
+        // 验证：私有思考 msg_thought_123 被成功过滤，未进入 messages
+        assert!(messages
+            .iter()
+            .all(|m| m.get("content").and_then(Value::as_str) != Some("private thought")));
+
+        // 验证：普通进度 commentary 消息被成功保留
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(
+            messages[1]["content"],
+            "概览显示 HTTP 502，接下来检查网关连接。"
+        );
+
+        // 验证：工具调用正常跟随
+        assert_eq!(messages[2]["role"], "assistant");
+        assert_eq!(
+            messages[2]["tool_calls"][0]["function"]["name"],
+            "inspect_case"
+        );
     }
 
     #[test]
@@ -1644,32 +1700,6 @@ mod variant_tests {
 
         assert_eq!(request_thinking.budget_tokens, Some(1_024));
     }
-}
-
-fn compact_apply_patch_failure_output(
-    output: String,
-    seen: &mut std::collections::HashSet<String>,
-    distinct_count: &mut usize,
-) -> String {
-    if !output.contains("apply_patch verification failed")
-        && !output.contains("Failed to find expected lines")
-        && !output.contains("Failed to find context")
-        && !output.contains("Expected update hunk")
-    {
-        return output;
-    }
-
-    let fingerprint = output.lines().take(8).collect::<Vec<_>>().join("\n");
-    if !seen.insert(fingerprint) {
-        return "[Repeated apply_patch failure omitted: the same error was already provided earlier in this request.]".to_string();
-    }
-
-    *distinct_count += 1;
-    if *distinct_count > 6 {
-        return "[Additional apply_patch failure omitted to avoid a retry loop. Produce a fresh V4A patch from current file contents instead of repeating previous failed patches.]".to_string();
-    }
-
-    output
 }
 
 fn codex_ledger_from_body(
@@ -2003,7 +2033,8 @@ pub async fn handle_chat_completions(
     let request_timeout = state.request_timeout;
     let token_manager = state.token_manager;
     let pool_size = token_manager.len();
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size).max(1);
+    // [FIX #3485] 自适应多账号池与单账号退避最大重试次数 (单账号3次，多账号整池两轮)
+    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(pool_size);
 
     let mut last_error = String::new();
     let mut last_email: Option<String> = None;
@@ -2012,6 +2043,7 @@ pub async fn handle_chat_completions(
     let mut image_permit = None;
     let mut failure_statuses = FailureStatusTracker::default();
     let mut used_attempts = 0;
+    let mut retried_without_thinking = false;
 
     // 2. 模型路由解析 (移到循环外以支持在所有路径返回 X-Mapped-Model)
     let mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
@@ -2096,11 +2128,13 @@ pub async fn handle_chat_completions(
                             None,
                             &e,
                         );
-                        return Ok((
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            headers,
-                            format!("Token error: {}", e),
-                        )
+                        let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+                            "openai",
+                            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                            mapped_model.as_str(),
+                            &e,
+                        );
+                        return Ok((StatusCode::SERVICE_UNAVAILABLE, headers, Json(dual_err))
                             .into_response());
                     }
                 }
@@ -2132,6 +2166,10 @@ pub async fn handle_chat_completions(
                 &mut gemini_body,
                 &mapped_model,
             );
+        crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
+            &mut gemini_body,
+        );
+        crate::proxy::mappers::common_utils::ensure_gemini_payload_ends_with_user(&mut gemini_body);
         if let Some(ref recorder) = upstream_recorder {
             recorder.set_value(&gemini_body);
         }
@@ -2192,6 +2230,7 @@ pub async fn handle_chat_completions(
 
         // [FIX #1522] Inject Anthropic Beta Headers for Claude models (OpenAI path)
         let mut extra_headers = std::collections::HashMap::new();
+        extra_headers.insert("x-session-id".to_string(), client_session_id.clone());
         if mapped_model.to_lowercase().contains("claude") {
             extra_headers.insert(
                 "anthropic-beta".to_string(),
@@ -2669,16 +2708,99 @@ pub async fn handle_chat_completions(
             .await;
         }
 
-        // 确定重试策略
-        let strategy = retry_state.determine_strategy(
+        let scheduling_mode = token_manager.get_scheduling_mode().await;
+        let allow_grace = match scheduling_mode {
+            crate::proxy::sticky_config::SchedulingMode::Balance => {
+                token_manager.tokens_count() <= 1
+            }
+            crate::proxy::sticky_config::SchedulingMode::CacheFirst => true,
+            crate::proxy::sticky_config::SchedulingMode::PerformanceFirst => false,
+        };
+
+        // 确定重试策略：传入当前 attempt 与 pool_size，执行智能自适应裁决
+        let strategy = retry_state.determine_strategy_adaptive(
             &account_id,
             status_code,
             &error_text,
             retry_after.as_deref(),
-            false,
+            retried_without_thinking,
+            attempt,
+            pool_size,
         );
-        let should_mark_limited =
-            status_code == 429 || status_code == 529 || status_code == 503 || status_code == 500;
+        // 统一流水线决策判定：协议无关的限流与错误判定
+        let classification = crate::proxy::pipeline::UpstreamClassification::classify(
+            status_code,
+            &error_text,
+            retry_after.as_deref(),
+        );
+
+        if classification.is_model_not_found() {
+            tracing::warn!(
+                "[{}] Pipeline: Target model [{}] not found on upstream (HTTP {}). Terminating retry loop without account lockout.",
+                trace_id, mapped_model, status_code
+            );
+            let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+                "openai",
+                status_code,
+                &mapped_model,
+                &error_text,
+            );
+            return Ok((
+                StatusCode::from_u16(status_code).unwrap_or(StatusCode::NOT_FOUND),
+                [
+                    ("X-Account-Email", email.as_str()),
+                    ("X-Mapped-Model", mapped_model.as_str()),
+                ],
+                Json(dual_err),
+            )
+                .into_response());
+        }
+
+        if classification.is_thought_signature_error() {
+            if !retried_without_thinking {
+                retried_without_thinking = true;
+                tracing::warn!(
+                    "[{}] Pipeline: Thinking signature error detected on upstream (HTTP {}). Surgically purging corrupted signatures and retrying on same account.",
+                    trace_id, status_code
+                );
+                // 1. 精准定向净化 ThinkingStore 中的异构污染签名（保留思考文本与健康签名）
+                crate::proxy::thinking_store::ThinkingStore::global()
+                    .purge_corrupted_signatures(&session_id, &mapped_model);
+                // 2. 清理当前 session 的 SignatureCache
+                crate::proxy::SignatureCache::global().delete_session_signature(&client_session_id);
+                // 3. 追加修复提示词到最后一条用户消息
+                if let Some(last_msg) = openai_req.messages.last_mut() {
+                    if last_msg.role == "user" {
+                        let repair_prompt = "\n\n[System Recovery] Your previous output contained an invalid signature. Please regenerate the response without the corrupted signature block.";
+                        if let Some(content) = &mut last_msg.content {
+                            use crate::proxy::mappers::openai::{
+                                OpenAIContent, OpenAIContentBlock,
+                            };
+                            match content {
+                                OpenAIContent::String(s) => {
+                                    s.push_str(repair_prompt);
+                                }
+                                OpenAIContent::Array(arr) => {
+                                    arr.push(OpenAIContentBlock::Text {
+                                        text: repair_prompt.to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                // 4. 保持同一账号原地重试
+                force_rotate = false;
+                continue;
+            } else {
+                tracing::warn!(
+                    "[{}] Pipeline: Thinking signature error persisted after retry without thinking. Terminating retry loop.",
+                    trace_id
+                );
+            }
+        }
+
+        let should_mark_limited = classification.should_lock_account();
         let needs_quota_refresh = if config.request_type == "image_gen" && should_mark_limited {
             token_manager
                 .mark_rate_limited_fast(
@@ -2712,6 +2834,12 @@ pub async fn handle_chat_completions(
                     &error_text,
                     Some(&mapped_model),
                 )
+                .await;
+        }
+
+        if status_code == 429 || status_code == 529 {
+            token_manager
+                .unbind_session_and_clear_last_used(Some(&session_id))
                 .await;
         }
 
@@ -2796,49 +2924,6 @@ pub async fn handle_chat_completions(
             continue;
         }
 
-        // [NEW] 处理 400 错误 (Thinking 签名失效)
-        if status_code == 400
-            && (error_text.contains("Invalid `signature`")
-                || error_text.contains("thinking.signature")
-                || error_text.contains("Invalid signature")
-                || error_text.contains("Corrupted thought signature"))
-        {
-            tracing::warn!(
-                "[OpenAI] Signature error detected on account {}, retrying without thinking",
-                email
-            );
-
-            // [FIX #3391] 彻底清除 thinking 配置并去除 -thinking 模型后缀，确保下一轮重试时完全关闭思考
-            openai_req.thinking = None;
-            if openai_req.model.ends_with("-thinking") {
-                openai_req.model = openai_req.model.trim_end_matches("-thinking").to_string();
-            }
-
-            // 追加修复提示词到最后一条用户消息
-            if let Some(last_msg) = openai_req.messages.last_mut() {
-                if last_msg.role == "user" {
-                    let repair_prompt = "\n\n[System Recovery] Your previous output contained an invalid signature. Please regenerate the response without the corrupted signature block.";
-
-                    if let Some(content) = &mut last_msg.content {
-                        use crate::proxy::mappers::openai::{OpenAIContent, OpenAIContentBlock};
-                        match content {
-                            OpenAIContent::String(s) => {
-                                s.push_str(repair_prompt);
-                            }
-                            OpenAIContent::Array(arr) => {
-                                arr.push(OpenAIContentBlock::Text {
-                                    text: repair_prompt.to_string(),
-                                });
-                            }
-                        }
-                        tracing::debug!("[OpenAI] Appended repair prompt to last user message");
-                    }
-                }
-            }
-
-            continue; // 重试
-        }
-
         // [FIX session-1M] 上游按 sessionId 在服务端累计会话输入,长工具循环会把累计推过 1M,
         // 之后该 sessionId 的所有请求都 400 "input token count exceeds ... 1048576"。
         // 给 (账号, 对话) 的 sessionId 升代并立即重试:新 sessionId = 上游全新会话,对话无感恢复。
@@ -2852,10 +2937,16 @@ pub async fn handle_chat_completions(
             continue; // 重试:下一轮 transform 时读取新代数,派生全新 sessionId
         }
 
-        // 404 等由于模型配置或路径错误的 HTTP 异常，直接报错，不进行无效轮换
+        // 404 等由于模型配置或路径错误的 HTTP 异常，直接报错返回双轨制友好报文，不进行无效轮换
         error!(
             "OpenAI Upstream non-retryable error {} on account {}: {}",
             status_code, email, error_text
+        );
+        let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+            "openai",
+            status_code,
+            &mapped_model,
+            &error_text,
         );
         return Ok((
             status,
@@ -2863,14 +2954,7 @@ pub async fn handle_chat_completions(
                 ("X-Account-Email", email.as_str()),
                 ("X-Mapped-Model", mapped_model.as_str()),
             ],
-            // [FIX] Return JSON error for better client compatibility
-            Json(json!({
-                "error": {
-                    "message": error_text,
-                    "type": "upstream_error",
-                    "code": status_code
-                }
-            })),
+            Json(dual_err),
         )
             .into_response());
     }
@@ -2883,28 +2967,16 @@ pub async fn handle_chat_completions(
         &last_error,
     );
 
-    Ok((
-        final_status,
-        headers,
-        format!("All accounts exhausted. Last error: {}", last_error),
-    )
-        .into_response())
+    let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+        "openai",
+        final_status.as_u16(),
+        &mapped_model,
+        &last_error,
+    );
+
+    Ok((final_status, headers, Json(dual_err)).into_response())
 }
 
-// --- Codex GUIDANCE PROMPTS ---
-
-
-
-
-
-
-
-
-
-
-
-
-// --- END Codex GUIDANCE PROMPTS ---
 
 fn responses_store_enabled(body: &Value) -> bool {
     body.get("store").and_then(Value::as_bool) != Some(false)
@@ -2940,11 +3012,19 @@ pub async fn handle_completions(
         .get("previous_response_id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let explicit_session_id = body
-        .get("session_id")
-        .and_then(Value::as_str)
+    let explicit_session_id = headers
+        .get("x-session-id")
+        .or_else(|| headers.get("session-id"))
+        .or_else(|| headers.get("x-claude-code-session-id"))
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.trim().to_string())
         .filter(|id| !id.is_empty())
-        .map(str::to_string);
+        .or_else(|| {
+            body.get("session_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+        });
     let response_id_for_save = format!("resp-{}", uuid::Uuid::new_v4());
     let http_tool_call_cache: std::collections::HashMap<String, serde_json::Value> =
         std::collections::HashMap::new();
@@ -3099,9 +3179,6 @@ pub async fn handle_completions(
             }
         }
 
-        let mut seen_apply_patch_failures = std::collections::HashSet::new();
-        let mut apply_patch_failure_distinct_count = 0usize;
-
         // Pass 2: Map durable conversation items to Gemini messages. Visible
         // assistant commentary stays in Codex's local transcript and must not
         // be replayed as model history.
@@ -3121,14 +3198,9 @@ pub async fn handle_completions(
                             .and_then(Value::as_str)
                             .unwrap_or("user")
                             .to_string();
-                        let transcript_only_metadata =
-                            is_codex_transcript_only_assistant_message(&item, "");
                         let (text_parts, image_parts) = responses_message_parts(&mut item);
-
                         let joined_text = text_parts.join("\n");
-                        if transcript_only_metadata
-                            || joined_text.trim_start().starts_with("**Thinking**")
-                        {
+                        if is_codex_transcript_only_assistant_message(&item, &joined_text) {
                             continue;
                         }
 
@@ -3143,6 +3215,16 @@ pub async fn handle_completions(
                             .or_else(|| item.get("signature"))
                             .and_then(Value::as_str)
                             .map(str::to_string);
+
+                        // 若为 assistant 角色且没有任何实际正文、图像或思考元数据，属于纯空占位消息，予以过滤
+                        if role == "assistant"
+                            && joined_text.trim().is_empty()
+                            && image_parts.is_empty()
+                            && reasoning_content.is_none()
+                            && signature.is_none()
+                        {
+                            continue;
+                        }
 
                         // 构造消息内容：如果有图像则使用数组格式
                         let mut message = if image_parts.is_empty() {
@@ -3334,13 +3416,6 @@ pub async fn handle_completions(
                             "shell".to_string()
                         };
 
-                        if name == "apply_patch" {
-                            output_str = compact_apply_patch_failure_output(
-                                output_str,
-                                &mut seen_apply_patch_failures,
-                                &mut apply_patch_failure_distinct_count,
-                            );
-                        }
                         output_str = prefix_with_step_marker(step_marker, output_str);
                         let output_content =
                             build_responses_tool_output_content(output_str, output_media);
@@ -3621,7 +3696,11 @@ pub async fn handle_completions(
 
     // [NEW v4.2.0] Context Management & Reasoning Replay
     let fallback_sid = if is_responses_api {
-        routing_session_id.clone()
+        if explicit_session_id.is_some() || previous_response_id.is_some() {
+            routing_session_id.clone()
+        } else {
+            SessionManager::extract_openai_session_id(&openai_req)
+        }
     } else {
         SessionManager::extract_openai_session_id(&openai_req)
     };
@@ -3632,6 +3711,7 @@ pub async fn handle_completions(
     );
     openai_req.session_id = Some(session_scope.store_key.clone());
     let session_id_str = session_scope.store_key.clone();
+    let client_session_id = session_scope.client_id.clone();
     let signature_session_id_str = if is_responses_api {
         previous_response_id
             .clone()
@@ -3845,7 +3925,8 @@ pub async fn handle_completions(
 
     let upstream = state.upstream.clone();
     let pool_size = token_manager.len();
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size).max(1);
+    // [FIX #3485] 自适应多账号池与单账号退避最大重试次数 (单账号3次，多账号整池两轮)
+    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(pool_size);
 
     let mut last_error = String::new();
     let mut last_email: Option<String> = None;
@@ -3953,7 +4034,7 @@ pub async fn handle_completions(
                 &project_id,
                 &mapped_model,
                 proxy_token.as_ref(),
-                &routing_session_id,
+                &session_id_str,
                 signature_read_key.as_deref(),
                 true, // is_responses_api
             )
@@ -3974,6 +4055,10 @@ pub async fn handle_completions(
                 &mut gemini_body,
                 &mapped_model,
             );
+        crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
+            &mut gemini_body,
+        );
+        crate::proxy::mappers::common_utils::ensure_gemini_payload_ends_with_user(&mut gemini_body);
         if let Some(ref recorder) = upstream_recorder {
             recorder.set_value(&gemini_body);
         }
@@ -4048,13 +4133,17 @@ pub async fn handle_completions(
         };
         let query_string = if list_response { Some("alt=sse") } else { None };
 
+        let mut extra_headers = std::collections::HashMap::new();
+        extra_headers.insert("x-session-id".to_string(), client_session_id.clone());
+
         let upstream_req_start = std::time::Instant::now();
         let call_result = match upstream
-            .call_v1_internal(
+            .call_v1_internal_with_headers(
                 method,
                 &access_token,
                 gemini_body,
                 query_string,
+                extra_headers,
                 Some(account_id.as_str()),
             )
             .await
@@ -4650,8 +4739,36 @@ pub async fn handle_completions(
             error_text
         );
 
-        // 3. 标记限流状态(用于 UI 显示)
-        if status_code == 429 || status_code == 529 || status_code == 503 || status_code == 500 {
+        // 3. 统一流水线判定与标记限流状态(用于 UI 显示)
+        let classification = crate::proxy::pipeline::UpstreamClassification::classify(
+            status_code,
+            &error_text,
+            retry_after.as_deref(),
+        );
+
+        if classification.is_model_not_found() {
+            tracing::warn!(
+                "[{}] Pipeline: Target model [{}] not found on upstream (HTTP {}). Terminating completions retry loop without account lockout.",
+                trace_id, mapped_model, status_code
+            );
+            let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+                "openai",
+                status_code,
+                &mapped_model,
+                &error_text,
+            );
+            return Response::builder()
+                .status(StatusCode::from_u16(status_code).unwrap_or(StatusCode::NOT_FOUND))
+                .header("X-Account-Email", email.as_str())
+                .header("X-Mapped-Model", mapped_model.as_str())
+                .body(Body::from(
+                    serde_json::to_string(&dual_err).unwrap_or_default(),
+                ))
+                .unwrap()
+                .into_response();
+        }
+
+        if classification.should_lock_account() {
             token_manager
                 .mark_rate_limited_async(
                     &email,
@@ -4663,12 +4780,29 @@ pub async fn handle_completions(
                 .await;
         }
 
-        let strategy = retry_state.determine_strategy(
+        if status_code == 429 || status_code == 529 {
+            token_manager
+                .unbind_session_and_clear_last_used(Some(&session_id_str))
+                .await;
+        }
+
+        let scheduling_mode = token_manager.get_scheduling_mode().await;
+        let allow_grace = match scheduling_mode {
+            crate::proxy::sticky_config::SchedulingMode::Balance => {
+                token_manager.tokens_count() <= 1
+            }
+            crate::proxy::sticky_config::SchedulingMode::CacheFirst => true,
+            crate::proxy::sticky_config::SchedulingMode::PerformanceFirst => false,
+        };
+
+        let strategy = retry_state.determine_strategy_adaptive(
             &account_id,
             status_code,
             &error_text,
             retry_after.as_deref(),
             false,
+            attempt,
+            pool_size,
         );
 
         // 执行退备
@@ -4988,7 +5122,8 @@ pub async fn handle_images_generations_internal(
     let image_scheduler = state.image_scheduler.clone();
     let request_timeout = state.request_timeout;
     let max_pool_size = token_manager.len();
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(max_pool_size).max(1);
+    // [FIX #3485] 自适应多账号池与单账号退避最大重试次数 (单账号3次，多账号整池两轮)
+    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(max_pool_size);
 
     let mut tasks = JoinSet::new();
 
@@ -5129,9 +5264,13 @@ pub async fn handle_images_generations_internal(
                                     false,
                                 )
                             });
-                            // 429/500/503: mark limited before retry/rotation
-                            let should_mark_limited =
-                                status_code == 429 || status_code == 503 || status_code == 500;
+                            // 统一流水线限流裁决：500/503等服务异常绝不打入限流
+                            let classification = crate::proxy::pipeline::UpstreamClassification::classify(
+                                status_code,
+                                &err_text,
+                                retry_after.as_deref(),
+                            );
+                            let should_mark_limited = classification.should_lock_account();
                             let needs_quota_refresh = if should_mark_limited {
                                 tracing::warn!(
                                     "[Images] Account {} rate limited/error ({}), rotating...",
@@ -5509,7 +5648,8 @@ pub async fn handle_images_edits(
     let image_scheduler = state.image_scheduler.clone();
     let request_timeout = state.request_timeout;
     let max_pool_size = token_manager.len();
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(max_pool_size).max(1);
+    // [FIX #3485] 自适应多账号池与单账号退避最大重试次数 (单账号3次，多账号整池两轮)
+    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(max_pool_size);
 
     let mut tasks = JoinSet::new();
     for _ in 0..n {
@@ -5614,9 +5754,14 @@ pub async fn handle_images_edits(
                                     false,
                                 )
                             });
-                            // 429/500/503 等错误进行标记和重试
-                            let should_mark_limited =
-                                status_code == 429 || status_code == 503 || status_code == 500;
+                            // 统一流水线限流裁决：500/503等服务异常绝不打入限流
+                            let classification =
+                                crate::proxy::pipeline::UpstreamClassification::classify(
+                                    status_code,
+                                    &err_text,
+                                    retry_after.as_deref(),
+                                );
+                            let should_mark_limited = classification.should_lock_account();
                             let needs_quota_refresh = if should_mark_limited {
                                 tracing::warn!(
                                     "[Images] Account {} rate limited/error ({}), rotating...",
@@ -6535,10 +6680,10 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown")
                         .to_string();
-                    if item_type == "local_shell_call" || name == "local_shell_call" {
-                        name = "shell".to_string();
-                    } else if item_type == "web_search_call" || name == "web_search_call" {
-                        name = "google_search".to_string();
+                    if item_type == "local_shell_call" && name == "unknown" {
+                        name = "local_shell_call".to_string();
+                    } else if item_type == "web_search_call" && name == "unknown" {
+                        name = "web_search_call".to_string();
                     }
                     call_id_to_name.insert(call_id.to_string(), name);
                 }
@@ -6548,8 +6693,6 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
     }
 
     {
-        let mut seen_apply_patch_failures = std::collections::HashSet::new();
-        let mut apply_patch_failure_distinct_count = 0usize;
         for mut item in input_items {
             let item_type = responses_input_item_type(&item).to_string();
             let step_marker = step_markers.pop_front();
@@ -6566,14 +6709,24 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                         .unwrap_or("user")
                         .to_string();
                     let (text_parts, image_parts) = responses_message_parts(&mut item);
+                    let joined_text = text_parts.join("\n");
+                    if is_codex_transcript_only_assistant_message(&item, &joined_text) {
+                        continue;
+                    }
+
+                    if role == "assistant"
+                        && joined_text.trim().is_empty()
+                        && image_parts.is_empty()
+                    {
+                        continue;
+                    }
 
                     if image_parts.is_empty() {
-                        let content = prefix_with_step_marker(step_marker, text_parts.join("\n"));
+                        let content = prefix_with_step_marker(step_marker, joined_text);
                         messages.push(json!({ "role": role, "content": content }));
                     } else {
                         let mut content_blocks = Vec::new();
-                        let marker_text =
-                            prefix_with_step_marker(step_marker, text_parts.join("\n"));
+                        let marker_text = prefix_with_step_marker(step_marker, joined_text);
                         if !marker_text.is_empty() {
                             content_blocks.push(json!({ "type": "text", "text": marker_text }));
                         }
@@ -6681,13 +6834,6 @@ fn convert_codex_to_openai_request(mut body: Value) -> Value {
                         None => "shell".to_string(),
                     };
 
-                    if name == "apply_patch" {
-                        output_str = compact_apply_patch_failure_output(
-                            output_str,
-                            &mut seen_apply_patch_failures,
-                            &mut apply_patch_failure_distinct_count,
-                        );
-                    }
                     output_str = prefix_with_step_marker(step_marker, output_str);
                     let output_content =
                         build_responses_tool_output_content(output_str, output_media);

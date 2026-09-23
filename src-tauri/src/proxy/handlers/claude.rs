@@ -15,7 +15,7 @@ use tracing::{debug, error, info};
 use crate::proxy::common::client_adapter::CLIENT_ADAPTERS; // [NEW] Import Adapter Registry
 use crate::proxy::debug_logger;
 use crate::proxy::mappers::claude::{
-    clean_cache_control_from_messages, close_tool_loop_for_thinking, create_claude_sse_stream,
+    clean_cache_control_from_messages, create_claude_sse_stream,
     filter_invalid_thinking_blocks_with_family, merge_consecutive_messages,
     models::{Message, MessageContent},
     transform_response, ClaudeRequest,
@@ -615,11 +615,12 @@ pub async fn handle_messages(
     // [CRITICAL FIX] 过滤并修复 Thinking 块签名 (Enhanced with family check)
     filter_invalid_thinking_blocks_with_family(&mut request.messages, target_family);
 
-    // [New] Recover from broken tool loops (where signatures were stripped)
-    // This prevents "Assistant message must start with thinking" errors by closing the loop with synthetic messages
-    if state.experimental.read().await.enable_tool_loop_recovery {
-        close_tool_loop_for_thinking(&mut request.messages);
-    }
+    // [FIX Prompt-Cache] 严禁在正常请求路径中注入合成消息 (close_tool_loop_for_thinking)！
+    // Claude Code 客户端按规范不会在后续轮次中回传历史 thinking 块。
+    // InboundThinkingPipeline 与 ThinkingStore 会在转译为 Google contents 时自动恢复真实思考块和加密签名，
+    // finalize_gemini_contents_thinking 亦具备完整的首位思考块与哨兵兜底。
+    // 若在此处注入 "[System: Tool execution completed...]" 等合成消息，会导致对话历史前缀在轮次间突变，
+    // 进而彻底破坏 Google Gemini 上游的 Prompt Caching（缓存崩塌）。
 
     let experimental_cfg = state.experimental.read().await;
     let compression_level = if experimental_cfg.compression_level == "disabled" {
@@ -850,9 +851,8 @@ pub async fn handle_messages(
     let token_manager = state.token_manager;
 
     let pool_size = token_manager.len();
-    // [FIX] Ensure max_attempts is at least 2 to allow for internal retries (e.g. stripping signatures)
-    // even if the user has only 1 account.
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size.saturating_add(1)).max(2);
+    // [FIX #3485] 自适应多账号池与单账号退避最大重试次数 (单账号3次，多账号整池两轮)
+    let max_attempts = super::common::calculate_max_retry_attempts(pool_size);
 
     let mut last_error = String::new();
     let mut retried_without_thinking = false;
@@ -932,18 +932,13 @@ pub async fn handle_messages(
                     None,
                     &safe_message,
                 );
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    headers,
-                    Json(json!({
-                        "type": "error",
-                        "error": {
-                            "type": "overloaded_error",
-                            "message": format!("No available accounts: {}", safe_message)
-                        }
-                    })),
-                )
-                    .into_response();
+                let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+                    "claude",
+                    StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    mapped_model.as_str(),
+                    &safe_message,
+                );
+                return (StatusCode::SERVICE_UNAVAILABLE, headers, Json(dual_err)).into_response();
             }
         };
 
@@ -1176,6 +1171,10 @@ pub async fn handle_messages(
                 &mut gemini_body,
                 &mapped_model,
             );
+        crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
+            &mut gemini_body,
+        );
+        crate::proxy::mappers::common_utils::ensure_gemini_payload_ends_with_user(&mut gemini_body);
 
         let norm_total_micros = norm_start.elapsed().as_micros() as u64;
         let tf_micros = transform_timing.think_fill_micros;
@@ -1227,6 +1226,7 @@ pub async fn handle_messages(
         let query = if actual_stream { Some("alt=sse") } else { None };
         // [FIX #765/1522] Prepare Robust Beta Headers for Claude models
         let mut extra_headers = std::collections::HashMap::new();
+        extra_headers.insert("x-session-id".to_string(), client_session_id.clone());
         if mapped_model.to_lowercase().contains("claude") {
             extra_headers.insert(
                 "anthropic-beta".to_string(),
@@ -1691,14 +1691,36 @@ pub async fn handle_messages(
             .await;
         }
 
-        // 3. 标记限流状态(用于 UI 显示) - 使用异步版本以支持实时配额刷新
-        // 🆕 传入实际使用的模型,实现模型级别限流,避免不同模型配额互相影响
-        if status_code == 429
-            || status_code == 529
-            || status_code == 503
-            || status_code == 500
-            || status_code == 404
-        {
+        // 3. 统一流水线决策判定（协议无关的唯一真理）
+        let classification = crate::proxy::pipeline::UpstreamClassification::classify(
+            status_code,
+            &error_text,
+            retry_after.as_deref(),
+        );
+
+        if classification.is_model_not_found() {
+            tracing::warn!(
+                "[{}] Pipeline: Target model [{}] not found on upstream (HTTP {}). Terminating retry loop without account lockout.",
+                trace_id, request_with_mapped.model, status_code
+            );
+            let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+                "claude",
+                status_code,
+                &request_with_mapped.model,
+                &error_text,
+            );
+            return (
+                StatusCode::from_u16(status_code).unwrap_or(StatusCode::NOT_FOUND),
+                [
+                    ("X-Account-Email", email.as_str()),
+                    ("X-Mapped-Model", request_with_mapped.model.as_str()),
+                ],
+                Json(dual_err),
+            )
+                .into_response();
+        }
+
+        if classification.should_lock_account() {
             token_manager
                 .mark_rate_limited_async_baseline(
                     &email,
@@ -1709,15 +1731,14 @@ pub async fn handle_messages(
                 )
                 .await;
 
-            // [FIX] 遭遇 429 限流或服务端过载时，立即解绑会话，防止下一轮尝试或后续请求死锁在故障账号上
-            if status_code == 429 || status_code == 529 {
-                if let Some(sid) = session_id {
-                    token_manager.clear_session_binding(sid);
-                    debug!(
-                        "[{}] Unbound session {} from account {} due to status {}",
-                        trace_id, sid, email, status_code
-                    );
-                }
+            token_manager
+                .unbind_session_and_clear_last_used(session_id)
+                .await;
+            if let Some(sid) = session_id {
+                debug!(
+                    "[{}] Unbound session {} from account {} due to status {}",
+                    trace_id, sid, email, status_code
+                );
             }
         }
 
@@ -1807,12 +1828,14 @@ pub async fn handle_messages(
                 }
             }
 
-            // [NEW] Heal session after stripping thinking blocks to prevent "naked ToolResult" rejection
-            // This ensures that any ToolResult in history is properly "closed" with synthetic messages
-            // if its preceding Thinking block was just converted to Text.
-            crate::proxy::mappers::claude::thinking_utils::close_tool_loop_for_thinking(
-                &mut request_for_body.messages,
-            );
+            // 精准定向净化 ThinkingStore 中当前 session 的异构污染签名，保留思考文本与健康历史签名，
+            // 彻底防止重试阶段再次把坏签名还原回 contents
+            crate::proxy::thinking_store::ThinkingStore::global()
+                .purge_corrupted_signatures(&session_id_str, &mapped_model);
+            crate::proxy::SignatureCache::global().delete_session_signature(&client_session_id);
+
+            // [FIX Prompt-Cache] 严禁在重试路径中注入合成消息 (close_tool_loop_for_thinking)！
+            // 保持历史消息真实纯净，由 InboundThinkingPipeline 与 finalize_gemini_contents_thinking 统一兜底签名与占位。
 
             // 清理模型名中的 -thinking 后缀
             if request_for_body.model.contains("claude-") {
@@ -1878,9 +1901,38 @@ pub async fn handle_messages(
             }
         }
 
-        // 确定重试策略
-        let retry_strategy =
-            determine_retry_strategy(status_code, &error_text, retried_without_thinking);
+        // [FIX session-1M] 上游按 sessionId 在服务端累计会话输入，长工具循环会把累计推过 1M，
+        // 之后该 sessionId 的所有请求都 400 "input token count exceeds ... 1048576"。
+        // 给 (账号, 对话) 的 sessionId 升代并立即重试:新 sessionId = 上游全新会话,对话无感恢复。
+        if status_code == 400 && error_text.contains("exceeds the maximum number of tokens") {
+            let fingerprint = session_id_str.as_str();
+            let generation = crate::proxy::common::session::bump_session(&account_id, fingerprint);
+            tracing::warn!(
+                "[Claude] Upstream session token accumulation exceeded 1M on account {}. sessionId bumped to generation {}, retrying with a fresh upstream session.",
+                email, generation
+            );
+            continue; // 重试:下一轮 transform 时读取新代数,派生全新 sessionId
+        }
+
+        let scheduling_mode = token_manager.get_scheduling_mode().await;
+        let allow_grace = match scheduling_mode {
+            crate::proxy::sticky_config::SchedulingMode::Balance => {
+                token_manager.tokens_count() <= 1
+            }
+            crate::proxy::sticky_config::SchedulingMode::CacheFirst => true,
+            crate::proxy::sticky_config::SchedulingMode::PerformanceFirst => false,
+        };
+
+        // 确定重试策略：传入当前 attempt 与 pool_size，执行智能自适应裁决
+        let retry_strategy = super::common::determine_retry_strategy_adaptive(
+            status_code,
+            &error_text,
+            retry_after.as_deref(),
+            retried_without_thinking,
+            allow_grace,
+            attempt,
+            pool_size,
+        );
 
         // 执行退避
         if apply_retry_strategy(
@@ -1925,10 +1977,16 @@ pub async fn handle_messages(
                 ).into_response();
             }
 
-            // 不可重试的错误，直接返回
+            // 不可重试的错误，直接返回双轨制友好报文
             error!(
                 "[{}] Non-retryable error {}: {}",
                 trace_id, status_code, error_text
+            );
+            let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+                "claude",
+                status_code,
+                &request_with_mapped.model,
+                &error_text,
             );
             return (
                 status,
@@ -1936,7 +1994,7 @@ pub async fn handle_messages(
                     ("X-Account-Email", email.as_str()),
                     ("X-Mapped-Model", request_with_mapped.model.as_str()),
                 ],
-                error_text,
+                Json(dual_err),
             )
                 .into_response();
         }
@@ -1949,8 +2007,8 @@ pub async fn handle_messages(
             "X-Account-Email",
             header::HeaderValue::from_str(&email).unwrap(),
         );
-        if let Some(model) = last_mapped_model {
-            if let Ok(v) = header::HeaderValue::from_str(&model) {
+        if let Some(ref model) = last_mapped_model {
+            if let Ok(v) = header::HeaderValue::from_str(model) {
                 headers.insert("X-Mapped-Model", v);
             }
         }
@@ -1978,19 +2036,20 @@ pub async fn handle_messages(
             }
         }
 
-        (response_status, headers, Json(json!({
-            "type": "error",
-            "error": {
-                "id": "err_retry_exhausted",
-                "type": error_type,
-                "message": format!("All {} attempts failed. Last status: {}. Error: {}", max_attempts, last_status, last_error)
-            }
-        }))).into_response()
+        let model_str = last_mapped_model.as_deref().unwrap_or("unknown");
+        let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+            "claude",
+            response_status.as_u16(),
+            model_str,
+            &last_error,
+        );
+
+        (response_status, headers, Json(dual_err)).into_response()
     } else {
         // Fallback if no email (e.g. mapping error before token)
         let mut headers = HeaderMap::new();
-        if let Some(model) = last_mapped_model {
-            if let Ok(v) = header::HeaderValue::from_str(&model) {
+        if let Some(ref model) = last_mapped_model {
+            if let Ok(v) = header::HeaderValue::from_str(model) {
                 headers.insert("X-Mapped-Model", v);
             }
         }
@@ -2017,14 +2076,15 @@ pub async fn handle_messages(
             last_status
         };
 
-        (response_status, headers, Json(json!({
-            "type": "error",
-            "error": {
-                "id": "err_retry_exhausted",
-                "type": error_type,
-                "message": format!("All {} attempts failed. Last status: {}. Error: {}", max_attempts, last_status, last_error)
-            }
-        }))).into_response()
+        let model_str = last_mapped_model.as_deref().unwrap_or("unknown");
+        let dual_err = crate::proxy::handlers::common::build_dual_track_error(
+            "claude",
+            response_status.as_u16(),
+            model_str,
+            &last_error,
+        );
+
+        (response_status, headers, Json(dual_err)).into_response()
     }
 }
 

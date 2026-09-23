@@ -41,14 +41,18 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'set_preferred_account': { url: '/api/proxy/preferred-account', method: 'POST' },
   'fetch_zai_models': { url: '/api/zai/models/fetch', method: 'POST' },
   'load_config': { url: '/api/config', method: 'GET' },
+  'get_config': { url: '/api/config', method: 'GET' },
   'save_config': { url: '/api/config', method: 'POST' },
   'get_proxy_stats': { url: '/api/proxy/stats', method: 'GET' },
   'set_proxy_monitor_enabled': { url: '/api/proxy/monitor/toggle', method: 'POST' },
+  'set_proxy_capture_health_logs': { url: '/api/proxy/monitor/health-logs/toggle', method: 'POST' },
 
   // Logs & Monitoring
   'get_proxy_logs_filtered': { url: '/api/logs', method: 'GET' },
   'get_proxy_logs_count_filtered': { url: '/api/logs/count', method: 'GET' },
+  'get_proxy_db_disk_size': { url: '/api/logs/disk-size', method: 'GET' },
   'clear_proxy_logs': { url: '/api/logs/clear', method: 'POST' },
+  'clear_thinking_store': { url: '/api/proxy/thinking-store/clear', method: 'POST' },
   'get_proxy_log_detail': { url: '/api/logs/:logId', method: 'GET' },
 
   // Debug Console
@@ -66,7 +70,11 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
 
   // OpenCode Sync
   'get_opencode_sync_status': { url: '/api/proxy/opencode/status', method: 'POST' },
+  'get_opencode_providers': { url: '/api/proxy/opencode/providers', method: 'GET' },
   'execute_opencode_sync': { url: '/api/proxy/opencode/sync', method: 'POST' },
+'execute_opencode_openai_sync': { url: '/api/proxy/opencode/openai-sync', method: 'POST' },
+  'execute_opencode_remove_provider': { url: '/api/proxy/opencode/remove-provider', method: 'POST' },
+
   'execute_opencode_restore': { url: '/api/proxy/opencode/restore', method: 'POST' },
   'execute_opencode_clear': { url: '/api/proxy/opencode/clear', method: 'POST' },
   'get_opencode_config_content': { url: '/api/proxy/opencode/config', method: 'POST' },

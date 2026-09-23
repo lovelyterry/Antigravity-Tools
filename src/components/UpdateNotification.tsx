@@ -3,12 +3,14 @@ import { X, Sparkles } from 'lucide-react';
 import { request as invoke } from '../utils/request';
 import { useTranslation } from 'react-i18next';
 
+
 interface UpdateInfo {
   has_update: boolean;
   latest_version: string;
   current_version: string;
   download_url: string;
   source?: string;
+  proxy_url?: string;
 }
 
 interface UpdateNotificationProps {
@@ -33,9 +35,10 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
         return;
       }
       setUpdateInfo(info);
-      setTimeout(() => setIsVisible(true), 100);
+setTimeout(() => setIsVisible(true), 100);
     } catch {
       onClose();
+
     }
   };
 
@@ -50,10 +53,11 @@ export const UpdateNotification: React.FC<UpdateNotificationProps> = ({ onClose 
   if (!updateInfo || !isVisible) return null;
 
   return (
-    <div className={`fixed bottom-6 right-6 z-[9999] transition-all duration-300 ${isClosing ? 'opacity-0 translate-y-4' : 'opacity-100 translate-y-0'}`}>
+<div className={`fixed bottom-6 right-6 z-[9999] transition-all duration-300 ${isClosing ? 'opacity-0 translate-y-4' : 'opacity-100 translate-y-0'}`}>
       <div className="bg-white dark:bg-base-100 shadow-2xl border border-gray-100 dark:border-base-200 rounded-2xl p-5 max-w-sm flex items-start gap-3">
         <div className="p-2 rounded-xl bg-gradient-to-br from-blue-500 to-purple-600 text-white shadow-lg shadow-blue-500/25">
           <Sparkles size={18} />
+
         </div>
         <div className="flex-1">
           <h4 className="text-sm font-bold text-gray-900 dark:text-base-content">

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, startTransition } from 'react';
 import { Save, Github, User, MessageCircle, ExternalLink, RefreshCw, Heart, Coffee, LayoutDashboard, Users, Network, Activity, BarChart3, Settings as SettingsIcon, Lock, CheckCircle2, Globe, Send } from 'lucide-react';
 import { request as invoke } from '../utils/request';
 import { useConfigStore } from '../stores/useConfigStore';
@@ -20,7 +20,9 @@ function Settings() {
     const { config, loadConfig, saveConfig, updateLanguage, updateTheme } = useConfigStore();
     const { enable, disable, isEnabled } = useDebugConsole();
     const [activeTab, setActiveTab] = useState<'general' | 'account' | 'proxy' | 'advanced' | 'debug' | 'about'>('general');
+
     const [appVersion] = useState<string>('4.7.4');
+
     const [formData, setFormData] = useState<AppConfig>({
         language: 'zh',
         theme: 'system',
@@ -73,8 +75,6 @@ function Settings() {
     });
 
     // Dialog state
-    // Dialog state
-    const [isClearLogsOpen, setIsClearLogsOpen] = useState(false);
     const [isSupportModalOpen, setIsSupportModalOpen] = useState(false);
     const [dataDirPath, setDataDirPath] = useState<string>('~/.antigravity_tools/');
 
@@ -98,6 +98,7 @@ function Settings() {
     const [isBrewUpgrading, setIsBrewUpgrading] = useState(false);
     const [isBrewConfirmOpen, setIsBrewConfirmOpen] = useState(false);
     const [isBrewSuccessOpen, setIsBrewSuccessOpen] = useState(false);
+    const [isUpdateConfirmOpen, setIsUpdateConfirmOpen] = useState(false);
 
 
     useEffect(() => {
@@ -139,15 +140,7 @@ function Settings() {
         }
     };
 
-    const confirmClearLogs = async () => {
-        try {
-            await invoke('clear_log_cache');
-            showToast(t('settings.advanced.logs_cleared'), 'success');
-        } catch (error) {
-            showToast(`${t('common.error')}: ${error}`, 'error');
-        }
-        setIsClearLogsOpen(false);
-    };
+
 
     const handleOpenDataDir = async () => {
         try {
@@ -200,6 +193,7 @@ function Settings() {
             if (result.has_update) {
                 const sourceMsg = result.source && result.source !== 'GitHub API' ? ` (via ${result.source})` : '';
                 showToast(t('settings.about.new_version_available', { version: result.latest_version }) + sourceMsg, 'info');
+                setIsUpdateConfirmOpen(true);
             } else {
                 showToast(t('settings.about.latest_version'), 'success');
             }
@@ -207,6 +201,26 @@ function Settings() {
             showToast(`${t('settings.about.update_check_failed')}: ${error}`, 'error');
         } finally {
             setIsCheckingUpdate(false);
+        }
+    };
+
+    const handleConfirmUpdate = async () => {
+        setIsUpdateConfirmOpen(false);
+        if (isBrewInstalled) {
+            handleBrewUpgrade();
+            return;
+        }
+        if (isTauri()) {
+            try {
+                await emit('app://trigger-update');
+            } catch (err) {
+                console.error('Failed to trigger update event:', err);
+                if (updateInfo?.downloadUrl) {
+                    window.open(updateInfo.downloadUrl, '_blank', 'noopener,noreferrer');
+                }
+            }
+        } else if (updateInfo?.downloadUrl) {
+            window.open(updateInfo.downloadUrl, '_blank', 'noopener,noreferrer');
         }
     };
 
@@ -278,7 +292,7 @@ function Settings() {
                                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
                                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                 }`}
-                            onClick={() => setActiveTab('general')}
+                            onClick={() => startTransition(() => setActiveTab('general'))}
                         >
                             {t('settings.tabs.general')}
                         </button>
@@ -287,7 +301,7 @@ function Settings() {
                                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
                                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                 }`}
-                            onClick={() => setActiveTab('account')}
+                            onClick={() => startTransition(() => setActiveTab('account'))}
                         >
                             {t('settings.tabs.account')}
                         </button>
@@ -296,7 +310,7 @@ function Settings() {
                                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
                                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                 }`}
-                            onClick={() => setActiveTab('proxy')}
+                            onClick={() => startTransition(() => setActiveTab('proxy'))}
                         >
                             {t('settings.tabs.proxy')}
                         </button>
@@ -305,7 +319,7 @@ function Settings() {
                                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
                                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                 }`}
-                            onClick={() => setActiveTab('advanced')}
+                            onClick={() => startTransition(() => setActiveTab('advanced'))}
                         >
                             {t('settings.tabs.advanced')}
                         </button>
@@ -314,7 +328,7 @@ function Settings() {
                                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
                                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                 }`}
-                            onClick={() => setActiveTab('debug')}
+                            onClick={() => startTransition(() => setActiveTab('debug'))}
                         >
                             {t('settings.tabs.debug')}
                         </button>
@@ -323,7 +337,7 @@ function Settings() {
                                 ? 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
                                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
                                 }`}
-                            onClick={() => setActiveTab('about')}
+                            onClick={() => startTransition(() => setActiveTab('about'))}
                         >
                             {t('settings.tabs.about')}
                         </button>
@@ -354,7 +368,10 @@ function Settings() {
                                     onChange={(e) => {
                                         const newLang = e.target.value;
                                         setFormData({ ...formData, language: newLang });
-                                        i18n.changeLanguage(newLang);
+                                        document.documentElement.dir = newLang === 'ar' ? 'rtl' : 'ltr';
+                                        startTransition(() => {
+                                            i18n.changeLanguage(newLang);
+                                        });
                                         updateLanguage(newLang);
                                     }}
                                 >
@@ -389,7 +406,9 @@ function Settings() {
                                 </select>
                             </div>
 
+
                             {/* 菜单显示设置 */}
+
                                 <div className="border-t border-gray-200 dark:border-base-200 pt-6 mt-6">
                                     <h3 className="font-medium text-gray-900 dark:text-base-content mb-3">{t('settings.menu.title')}</h3>
                                     <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
@@ -844,21 +863,7 @@ function Settings() {
                                     </p>
                                 </div>
 
-                                {/* 日志缓存清理 */}
-                                <div className="border-t border-gray-200 dark:border-base-200 pt-4">
-                                    <h3 className="font-medium text-gray-900 dark:text-base-content mb-3">{t('settings.advanced.logs_title')}</h3>
-                                    <div className="bg-gray-50 dark:bg-base-200 border border-gray-200 dark:border-base-300 rounded-lg p-3 mb-3">
-                                        <p className="text-sm text-gray-600 dark:text-gray-400">{t('settings.advanced.logs_desc')}</p>
-                                    </div>
-                                    <div className="flex items-center gap-4">
-                                        <button
-                                            className="px-4 py-2 border border-gray-300 dark:border-base-300 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-base-200 transition-colors"
-                                            onClick={() => setIsClearLogsOpen(true)}
-                                        >
-                                            {t('settings.advanced.clear_logs')}
-                                        </button>
-                                    </div>
-                                </div>
+
 
                                 {/* Antigravity 缓存清理 */}
                                 <div className="border-t border-gray-200 dark:border-base-200 pt-4">
@@ -1243,8 +1248,8 @@ function Settings() {
                                                     <div className="text-sm text-orange-600 dark:text-orange-400 font-medium">
                                                         {t('settings.about.new_version_available', { version: updateInfo.latestVersion })}
                                                     </div>
-                                                    <div className="flex items-center gap-2">
-                                                        {isBrewInstalled && (
+                                                    <div className="flex items-center gap-2 flex-wrap justify-center">
+                                                        {isBrewInstalled ? (
                                                             <button
                                                                 onClick={() => setIsBrewConfirmOpen(true)}
                                                                 disabled={isBrewUpgrading}
@@ -1259,12 +1264,22 @@ function Settings() {
                                                                     t('settings.about.brew_upgrade')
                                                                 )}
                                                             </button>
+                                                        ) : (
+                                                            isTauri() && (
+                                                                <button
+                                                                    onClick={handleConfirmUpdate}
+                                                                    className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-all shadow-sm active:scale-95 flex items-center gap-1.5"
+                                                                >
+                                                                    <RefreshCw className="w-3.5 h-3.5" />
+                                                                    {t('settings.about.upgrade_now_btn', { defaultValue: '立即自动更新' })}
+                                                                </button>
+                                                            )
                                                         )}
                                                         <a
                                                             href={updateInfo.downloadUrl}
                                                             target="_blank"
                                                             rel="noreferrer"
-                                                            className="px-4 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-lg transition-colors flex items-center gap-1.5"
+                                                            className="px-4 py-1.5 bg-gray-100 hover:bg-gray-200 dark:bg-base-200 dark:hover:bg-base-300 text-gray-700 dark:text-gray-200 text-sm rounded-lg transition-colors flex items-center gap-1.5 border border-gray-200 dark:border-base-300"
                                                         >
                                                             {t('settings.about.download_update')}
                                                             <ExternalLink className="w-3.5 h-3.5" />
@@ -1289,6 +1304,7 @@ function Settings() {
                     }
                 </div >
 
+
                 <ModalDialog
                     isOpen={isClearLogsOpen}
                     title={t('settings.advanced.clear_logs_title')}
@@ -1300,6 +1316,7 @@ function Settings() {
                     onConfirm={confirmClearLogs}
                     onCancel={() => setIsClearLogsOpen(false)}
                 />
+
 
                 {/* Antigravity Cache Clear Modal */}
                 <ModalDialog
@@ -1396,6 +1413,40 @@ function Settings() {
                     <p className="text-sm text-gray-600 dark:text-gray-400">
                         {t('settings.about.brew_upgrade_success')}
                     </p>
+                </ModalDialog>
+
+                {/* 新版本自动更新确认弹窗 */}
+                <ModalDialog
+                    isOpen={isUpdateConfirmOpen}
+                    title={t('settings.about.update_dialog_title', { defaultValue: '发现新版本可用' })}
+                    type="confirm"
+                    confirmText={t('settings.about.upgrade_now_btn', { defaultValue: '立即下载并自动更新' })}
+                    cancelText={t('common.cancel', { defaultValue: '稍后再说' })}
+                    onConfirm={handleConfirmUpdate}
+                    onCancel={() => setIsUpdateConfirmOpen(false)}
+                >
+                    <div className="space-y-3 py-1 text-sm text-gray-700 dark:text-gray-300">
+                        <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+                            {t('settings.about.update_confirm_desc', {
+                                defaultValue: '检测到最新版本，点击“立即下载并自动更新”将直接启动自动下载并在准备就绪后覆盖安装生效。',
+                            })}
+                        </p>
+                        <div className="bg-gray-50 dark:bg-base-200 p-3 rounded-lg border border-gray-200 dark:border-base-300 space-y-1.5 font-mono text-xs">
+                            <div className="flex items-center justify-between">
+                                <span className="text-gray-500">{t('settings.about.current_version')}:</span>
+                                <span className="font-semibold text-gray-800 dark:text-gray-200">{updateInfo?.currentVersion || appVersion}</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <span className="text-gray-500">{t('settings.about.latest_version_label', { defaultValue: '最新版本' })}:</span>
+                                <span className="font-bold text-emerald-600 dark:text-emerald-400">{updateInfo?.latestVersion}</span>
+                            </div>
+                            {updateInfo?.source && (
+                                <div className="text-[10px] text-gray-400 text-right pt-1 border-t border-gray-200/50 dark:border-base-300">
+                                    via {updateInfo.source}
+                                </div>
+                            )}
+                        </div>
+                    </div>
                 </ModalDialog>
 
                 {/* Support Modal */}

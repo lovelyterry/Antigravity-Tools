@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
 import { request as invoke } from '../utils/request';
 import { copyToClipboard } from '../utils/clipboard';
@@ -19,7 +19,8 @@ import {
     Check,
     X,
     Edit2,
-    Save
+    Save,
+    Share2
 } from 'lucide-react';
 import { AppConfig, ProxyConfig, StickySessionConfig, ExperimentalConfig } from '../types/config';
 import HelpTooltip from '../components/common/HelpTooltip';
@@ -32,7 +33,9 @@ import { CliSyncCard } from '../components/proxy/CliSyncCard';
 import DebouncedSlider from '../components/common/DebouncedSlider';
 import { listAccounts } from '../services/accountService';
 import CircuitBreaker from '../components/settings/CircuitBreaker';
-import AdvancedThinking from '../components/settings/AdvancedThinking';
+import GlobalSystemPrompt from '../components/settings/GlobalSystemPrompt';
+import ImageThinkingMode from '../components/settings/ImageThinkingMode';
+import ThinkingBudget from '../components/settings/ThinkingBudget';
 import { CircuitBreakerConfig } from '../types/config';
 
 interface ProxyStatus {
@@ -75,9 +78,9 @@ function CollapsibleCard({
     const { t } = useTranslation();
 
     return (
-        <div className="bg-white dark:bg-base-100 rounded-xl shadow-sm border border-gray-100 dark:border-gray-700/50 overflow-hidden transition-all duration-200 hover:shadow-md">
+        <div className="bg-white dark:bg-base-100 rounded-xl shadow-xs border border-gray-200/80 dark:border-base-200 overflow-hidden transition-all duration-200 hover:shadow-sm">
             <div
-                className="px-5 py-4 flex items-center justify-between cursor-pointer bg-gray-50/50 dark:bg-gray-800/50 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                className="px-5 py-3.5 flex items-center justify-between cursor-pointer bg-gray-50/70 dark:bg-base-200 hover:bg-gray-100/70 dark:hover:bg-base-300/70 transition-colors"
                 onClick={(e) => {
                     // Prevent toggle when clicking the switch or right element
                     if ((e.target as HTMLElement).closest('.no-expand')) return;
@@ -88,11 +91,11 @@ function CollapsibleCard({
                     <div className="text-gray-500 dark:text-gray-400">
                         {icon}
                     </div>
-                    <span className="font-medium text-sm text-gray-900 dark:text-gray-100">
+                    <span className="font-semibold text-sm text-gray-900 dark:text-white">
                         {title}
                     </span>
                     {enabled !== undefined && (
-                        <div className={cn('text-xs px-2 py-0.5 rounded-full', enabled ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400' : 'bg-gray-100 text-gray-500 dark:bg-gray-600/50 dark:text-gray-300')}>
+                        <div className={cn('text-xs px-2.5 py-0.5 rounded-full font-medium border', enabled ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-400 dark:border-emerald-800/60' : 'bg-gray-100 text-gray-600 border-gray-200 dark:bg-base-200 dark:text-gray-400 dark:border-base-300')}>
                             {enabled ? t('common.enabled') : t('common.disabled')}
                         </div>
                     )}
@@ -105,7 +108,7 @@ function CollapsibleCard({
                         <div className="flex items-center" onClick={(e) => e.stopPropagation()}>
                             <input
                                 type="checkbox"
-                                className="toggle toggle-sm bg-gray-200 dark:bg-gray-700 border-gray-300 dark:border-gray-600 checked:bg-blue-500 checked:border-blue-500"
+                                className="toggle toggle-sm bg-gray-200 dark:bg-base-300 border-gray-300 dark:border-base-300 checked:bg-blue-600 checked:border-blue-600"
                                 checked={enabled}
                                 onChange={(e) => onToggle(e.target.checked)}
                             />
@@ -113,7 +116,7 @@ function CollapsibleCard({
                     )}
 
                     <button
-                        className={cn('p-1 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-all duration-200', isExpanded ? 'rotate-180' : '')}
+                        className={cn('p-1.5 rounded-lg text-gray-500 hover:text-gray-800 hover:bg-gray-200/70 dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-base-200 transition-all duration-200', isExpanded ? 'rotate-180' : '')}
                     >
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="m6 9 6 6 6-6" />
@@ -123,19 +126,18 @@ function CollapsibleCard({
             </div>
 
             <div
-                className={`transition-all duration-300 ease-in-out border-t border-gray-100 dark:border-base-200 ${isExpanded ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0 overflow-hidden'
+                className={`transition-all duration-300 ease-in-out border-t border-gray-200/80 dark:border-base-200 ${isExpanded ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0 overflow-hidden'
                     }`}
             >
                 <div className="p-5 relative">
                     {/* Overlay when disabled */}
                     {enabled === false && !allowInteractionWhenDisabled && (
-                        <div className="absolute inset-0 bg-gray-100/40 dark:bg-black/30 z-10 cursor-not-allowed" />
+                        <div className="absolute inset-0 bg-gray-900/10 dark:bg-black/40 backdrop-blur-[0.5px] z-10 cursor-not-allowed" />
                     )}
-                    <div className={enabled === false && !allowInteractionWhenDisabled ? 'opacity-60 pointer-events-none select-none' : ''}>
+                    <div className={enabled === false && !allowInteractionWhenDisabled ? 'opacity-50 pointer-events-none select-none' : ''}>
                         {children}
                     </div>
                 </div>
-
             </div>
         </div>
     );
@@ -154,6 +156,7 @@ export default function ApiProxy() {
     });
 
     const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
+    const [activeMenuTab, setActiveMenuTab] = useState<'settings' | 'cli' | 'protocols'>('settings');
     const [configLoading, setConfigLoading] = useState(true);
     const [configError, setConfigError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
@@ -306,6 +309,10 @@ export default function ApiProxy() {
         if (!appConfig) return;
         try {
             await invoke('save_config', { config: appConfig });
+            const refreshed = await invoke<AppConfig>('load_config');
+            if (refreshed) {
+                setAppConfig(refreshed);
+            }
             showToast(t('common.saved'), 'success');
         } catch (error) {
             console.error('保存配置失败:', error);
@@ -317,10 +324,22 @@ export default function ApiProxy() {
     const handleMappingUpdate = async (type: 'custom', key: string, value: string) => {
         if (!appConfig) return;
 
-        console.log('[DEBUG] handleMappingUpdate called:', { type, key, value });
+        const trimmedKey = key.trim();
+        const lowerKey = trimmedKey.toLowerCase();
+
+        // 新增通配符仅允许内置 gemini-3.x-flash（x 必须大于 8）；已存在的项可继续编辑目标
+        const isExisting = !!(appConfig.proxy.custom_mapping && Object.prototype.hasOwnProperty.call(appConfig.proxy.custom_mapping, trimmedKey));
+        if (!isExisting && (trimmedKey.includes('*') || /gemini-3\.x-flash/i.test(trimmedKey) || lowerKey.includes('.x'))) {
+            if (lowerKey !== 'gemini-3.x-flash') {
+                showToast(t('proxy.router.wildcard_only_gemini_3x') || '仅允许内置通配符 gemini-3.x-flash（x 必须大于 8），其他请填写具体模型 ID', 'warning');
+                return;
+            }
+        }
+
+        console.log('[DEBUG] handleMappingUpdate called:', { type, key: trimmedKey, value });
 
         const newConfig = { ...appConfig.proxy };
-        newConfig.custom_mapping = { ...(newConfig.custom_mapping || {}), [key]: value };
+        newConfig.custom_mapping = { ...(newConfig.custom_mapping || {}), [trimmedKey]: value };
 
         try {
             await invoke('update_model_mapping', { config: newConfig });
@@ -342,10 +361,15 @@ export default function ApiProxy() {
         if (!appConfig) return;
         setIsResetConfirmOpen(false);
 
-        // 恢复到默认映射值 (空映射)
+        // 恢复到默认预设映射值
         const newConfig = {
             ...appConfig.proxy,
-            custom_mapping: {}
+            custom_mapping: {
+                "gemini-3.6-flash": "gemini-3.6-flash-tiered",
+                "gemini-3.7-flash": "gemini-3.7-flash-tiered",
+                "gemini-3.8-flash": "gemini-3.8-flash-tiered",
+                "gemini-3.x-flash": "3.x-flash-tiered",
+            }
         };
 
         try {
@@ -366,6 +390,10 @@ export default function ApiProxy() {
             name: t('proxy.router.preset_default'),
             description: t('proxy.router.preset_default_desc'),
             mappings: {
+                "gemini-3.6-flash": "gemini-3.6-flash-tiered",
+                "gemini-3.7-flash": "gemini-3.7-flash-tiered",
+                "gemini-3.8-flash": "gemini-3.8-flash-tiered",
+                "gemini-3.x-flash": "3.x-flash-tiered",
                 "gpt-4*": "gemini-3.1-pro-high",
                 "gpt-4o*": "gemini-3-flash",
                 "gpt-3.5*": "gemini-2.5-flash",
@@ -633,9 +661,27 @@ export default function ApiProxy() {
         try {
             if (status.running) {
                 await invoke('stop_proxy_service');
+                const newConfig = {
+                    ...appConfig,
+                    proxy: {
+                        ...appConfig.proxy,
+                        auto_start: false
+                    }
+                };
+                setAppConfig(newConfig);
+                await invoke('save_config', { config: newConfig });
             } else {
+                const newConfig = {
+                    ...appConfig,
+                    proxy: {
+                        ...appConfig.proxy,
+                        auto_start: true
+                    }
+                };
+                setAppConfig(newConfig);
+                await invoke('save_config', { config: newConfig });
                 // 使用当前的 appConfig.proxy 启动
-                await invoke('start_proxy_service', { config: appConfig.proxy });
+                await invoke('start_proxy_service', { config: newConfig.proxy });
             }
             await loadStatus();
         } catch (error: any) {
@@ -718,6 +764,8 @@ export default function ApiProxy() {
         setIsEditingAdminPassword(false);
     };
 
+
+
     return (
         <div className="h-full w-full overflow-y-auto overflow-x-hidden">
             <div className="p-5 space-y-4 max-w-7xl mx-auto">
@@ -762,30 +810,54 @@ export default function ApiProxy() {
 
                 {/* 配置区 */}
                 {!configLoading && !configError && appConfig && (
-                    <div className="bg-white dark:bg-base-100 rounded-xl shadow-sm border border-gray-100 dark:border-base-200">
-                        <div className="px-4 py-2.5 border-b border-gray-100 dark:border-base-200 flex items-center justify-between">
-                            <div className="flex items-center gap-4">
-                                <h2 className="text-base font-semibold flex items-center gap-2 text-gray-900 dark:text-base-content">
-                                    <Settings size={18} />
+                    <div className="bg-white dark:bg-base-100 rounded-xl shadow-xs border border-gray-200/80 dark:border-base-200">
+                        <div className="px-4 sm:px-5 py-2.5 border-b border-gray-100 dark:border-base-200 bg-gray-50/60 dark:bg-base-200/80 flex flex-wrap items-center justify-between gap-3">
+                            {/* 三个可选菜单栏：服务配置、CLI 一键配置、多协议支持 */}
+                            <div className="flex items-center gap-1.5 bg-gray-200/70 dark:bg-base-300/60 p-1 rounded-xl">
+                                <button
+                                    type="button"
+                                    onClick={() => setActiveMenuTab('settings')}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                                        activeMenuTab === 'settings'
+                                            ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-xs'
+                                            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                                    }`}
+                                >
+                                    <Settings size={14} className={activeMenuTab === 'settings' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'} />
                                     {t('proxy.config.title')}
-                                </h2>
-                                {/* 状态指示器 */}
-                                <div className="flex items-center gap-2 pl-4 border-l border-gray-200 dark:border-base-300">
-                                    <div className={`w-2 h-2 rounded-full ${status.running ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
-                                    <span className={`text-xs font-medium ${status.running ? 'text-green-600' : 'text-gray-500'}`}>
-                                        {status.running
-                                            ? `${t('proxy.status.running')} (${status.active_accounts} ${t('common.accounts')})`
-                                            : t('proxy.status.stopped')}
-                                    </span>
-                                </div>
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setActiveMenuTab('cli')}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                                        activeMenuTab === 'cli'
+                                            ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-xs'
+                                            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                                    }`}
+                                >
+                                    <Terminal size={14} className={activeMenuTab === 'cli' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'} />
+                                    {t('proxy.cli_sync.title', { defaultValue: 'CLI 一键配置' })}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setActiveMenuTab('protocols')}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all ${
+                                        activeMenuTab === 'protocols'
+                                            ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-xs'
+                                            : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                                    }`}
+                                >
+                                    <Share2 size={14} className={activeMenuTab === 'protocols' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'} />
+                                    {t('proxy.multi_protocol.title')}
+                                </button>
                             </div>
 
                             {/* 控制按钮 */}
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2.5 ml-auto">
                                 <button
                                     onClick={handleSaveProxySettings}
                                     disabled={!appConfig}
-                                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800 hover:bg-blue-100 dark:hover:bg-blue-900/40 ${!appConfig ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white shadow-xs active:scale-95 ${!appConfig ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 >
                                     <Save size={14} />
                                     {t('settings.save')}
@@ -793,9 +865,9 @@ export default function ApiProxy() {
                                 <button
                                     onClick={handleToggle}
                                     disabled={loading || !appConfig}
-                                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors flex items-center gap-2 ${status.running
-                                        ? 'bg-red-50 to-red-600 text-red-600 hover:bg-red-100 border border-red-200'
-                                        : 'bg-blue-600 hover:bg-blue-700 text-white shadow-sm shadow-blue-500/30'
+                                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 shadow-xs active:scale-95 ${status.running
+                                        ? 'bg-rose-600 hover:bg-rose-700 text-white border border-rose-600'
+                                        : 'bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-600'
                                         } ${(loading || !appConfig) ? 'opacity-50 cursor-not-allowed' : ''}`}
                                 >
                                     <Power size={14} />
@@ -803,11 +875,14 @@ export default function ApiProxy() {
                                 </button>
                             </div>
                         </div>
-                        <div className="p-3 space-y-3">
+
+                        {/* TAB 1: 服务配置 (settings) */}
+                        {activeMenuTab === 'settings' && (
+                            <div className="p-4 space-y-4">
                             {/* 监听端口、超时和自启动 */}
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <div>
-                                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    <label className="block text-xs font-semibold text-gray-700 dark:text-gray-200 mb-1.5">
                                         <span className="inline-flex items-center gap-1">
                                             {t('proxy.config.port')}
                                             <HelpTooltip
@@ -824,14 +899,31 @@ export default function ApiProxy() {
                                         min={8000}
                                         max={65535}
                                         disabled={status.running}
-                                        className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 text-xs text-gray-900 dark:text-base-content focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="w-full px-3 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg bg-white dark:bg-base-200 text-xs font-mono text-gray-900 dark:text-base-content focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                                     />
-                                    <p className="mt-0.5 text-[10px] text-gray-500 dark:text-gray-400">
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                         {t('proxy.config.port_hint')}
                                     </p>
+
+                                    {/* 监听端口下方空位：服务运行状态指示卡片 */}
+                                    <div className="mt-2.5 p-2 rounded-lg border border-gray-200/80 dark:border-base-300/80 bg-gray-50/70 dark:bg-base-200/50 flex items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <div className={`w-2.5 h-2.5 rounded-full ${status.running ? 'bg-emerald-500 shadow-xs shadow-emerald-500/50 animate-pulse' : 'bg-gray-400 dark:bg-gray-500'}`} />
+                                            <span className={`text-xs font-semibold ${status.running ? 'text-emerald-600 dark:text-emerald-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                                                {status.running
+                                                    ? `${t('proxy.status.running')} (${status.active_accounts} ${t('common.accounts')})`
+                                                    : t('proxy.status.stopped')}
+                                            </span>
+                                        </div>
+                                        {status.running && (
+                                            <span className="text-[10px] font-mono text-gray-400 dark:text-gray-500 truncate max-w-[130px]" title={status.base_url || `http://127.0.0.1:${appConfig.proxy.port || 8045}`}>
+                                                {status.base_url || `http://127.0.0.1:${appConfig.proxy.port || 8045}`}
+                                            </span>
+                                        )}
+                                    </div>
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                    <label className="block text-xs font-semibold text-gray-700 dark:text-gray-200 mb-1.5">
                                         <span className="inline-flex items-center gap-1">
                                             {t('proxy.config.request_timeout')}
                                             <HelpTooltip
@@ -845,28 +937,28 @@ export default function ApiProxy() {
                                         type="number"
                                         value={appConfig.proxy.request_timeout || 120}
                                         onChange={(e) => {
-                                            const value = parseInt(e.target.value);
-                                            const timeout = Math.max(30, Math.min(7200, value));
-                                            updateProxyConfig({ request_timeout: timeout });
+                                             const value = parseInt(e.target.value);
+                                             const timeout = Math.max(30, Math.min(7200, value));
+                                             updateProxyConfig({ request_timeout: timeout });
                                         }}
                                         min={30}
                                         max={7200}
                                         disabled={status.running}
-                                        className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 text-xs text-gray-900 dark:text-base-content focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="w-full px-3 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg bg-white dark:bg-base-200 text-xs font-mono text-gray-900 dark:text-base-content focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                                     />
-                                    <p className="mt-0.5 text-[10px] text-gray-500 dark:text-gray-400">
+                                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                         {t('proxy.config.request_timeout_hint')}
                                     </p>
                                 </div>
-                                <div className="flex items-center">
-                                    <label className="flex items-center cursor-pointer gap-3">
+                                <div className="flex items-center pt-5">
+                                    <label className="flex items-center cursor-pointer gap-3 select-none">
                                         <input
                                             type="checkbox"
-                                            className="toggle toggle-sm bg-gray-200 dark:bg-gray-700 border-gray-300 dark:border-gray-600 checked:bg-blue-500 checked:border-blue-500 disabled:opacity-50 disabled:bg-gray-100 dark:disabled:bg-gray-800"
+                                            className="toggle toggle-sm bg-gray-200 dark:bg-base-300 border-gray-300 dark:border-base-300 checked:bg-blue-600 checked:border-blue-600 disabled:opacity-50 disabled:bg-gray-100 dark:disabled:bg-base-200"
                                             checked={appConfig.proxy.auto_start}
                                             onChange={(e) => updateProxyConfig({ auto_start: e.target.checked })}
                                         />
-                                        <span className="text-xs font-medium text-gray-900 dark:text-base-content inline-flex items-center gap-1">
+                                        <span className="text-xs font-semibold text-gray-700 dark:text-gray-200 inline-flex items-center gap-1">
                                             {t('proxy.config.auto_start')}
                                             <HelpTooltip
                                                 text={t('proxy.config.auto_start_tooltip')}
@@ -879,28 +971,13 @@ export default function ApiProxy() {
                             </div>
 
 
-                            <div className="border-t border-gray-200 dark:border-base-300 pt-3 mt-3">
-                                <div className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">{t('proxy.config.log_retention_title')}</div>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                    {([['max_body_age_hours', 'log_retention_body_hours'], ['max_age_days', 'log_retention_age_days'], ['max_rows', 'log_retention_rows']] as const).map(([field, label]) => (
-                                        <label key={field} className="text-xs text-gray-600 dark:text-gray-400">
-                                            {t(`proxy.config.${label}`)}
-                                            <input type="number" min={1}
-                                                value={appConfig.proxy.log_retention?.[field] ?? (field === 'max_body_age_hours' ? 24 : field === 'max_age_days' ? 30 : 100000)}
-                                                onChange={(e) => updateProxyConfig({ log_retention: { ...(appConfig.proxy.log_retention || { max_body_age_hours: 24, max_age_days: 30, max_rows: 100000 }), [field]: Math.max(1, Number(e.target.value)) } })}
-                                                className="w-full mt-1 px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 text-xs" />
-                                        </label>
-                                    ))}
-                                </div>
-                            </div>
-
-                            {/* 局域网访问 & 访问授权 - 合并到同一行 */}
-                            <div className="border-t border-gray-200 dark:border-base-300 pt-3 mt-3">
+                            {/* 局域网访问 & 访问授权 */}
+                            <div className="border-t border-gray-100 dark:border-base-200 pt-3.5 mt-3.5">
                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                                     {/* 允许局域网访问 */}
-                                    <div className="space-y-2">
+                                    <div className="space-y-1.5">
                                         <div className="flex items-center justify-between">
-                                            <span className="text-xs font-medium text-gray-700 dark:text-gray-300 inline-flex items-center gap-1">
+                                            <span className="text-xs font-semibold text-gray-700 dark:text-gray-200 inline-flex items-center gap-1">
                                                 {t('proxy.config.allow_lan_access')}
                                                 <HelpTooltip
                                                     text={t('proxy.config.allow_lan_access_tooltip')}
@@ -910,32 +987,32 @@ export default function ApiProxy() {
                                             </span>
                                             <input
                                                 type="checkbox"
-                                                className="toggle toggle-sm bg-gray-200 dark:bg-gray-700 border-gray-300 dark:border-gray-600 checked:bg-blue-500 checked:border-blue-500"
+                                                className="toggle toggle-sm bg-gray-200 dark:bg-base-300 border-gray-300 dark:border-base-300 checked:bg-blue-600 checked:border-blue-600"
                                                 checked={appConfig.proxy.allow_lan_access || false}
                                                 onChange={(e) => updateProxyConfig({ allow_lan_access: e.target.checked })}
                                             />
                                         </div>
-                                        <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                                        <p className="text-xs text-gray-500 dark:text-gray-400">
                                             {(appConfig.proxy.allow_lan_access || false)
                                                 ? t('proxy.config.allow_lan_access_hint_enabled')
                                                 : t('proxy.config.allow_lan_access_hint_disabled')}
                                         </p>
                                         {(appConfig.proxy.allow_lan_access || false) && (
-                                            <p className="text-[10px] text-amber-600 dark:text-amber-500">
+                                            <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
                                                 {t('proxy.config.allow_lan_access_warning')}
                                             </p>
                                         )}
                                         {status.running && (
-                                            <p className="text-[10px] text-blue-600 dark:text-blue-400">
+                                            <p className="text-xs text-blue-600 dark:text-blue-400 font-medium">
                                                 {t('proxy.config.allow_lan_access_restart_hint')}
                                             </p>
                                         )}
                                     </div>
 
                                     {/* 访问授权 */}
-                                    <div className="space-y-2">
+                                    <div className="space-y-1.5">
                                         <div className="flex items-center justify-between">
-                                            <label className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                                            <label className="text-xs font-semibold text-gray-700 dark:text-gray-200">
                                                 <span className="inline-flex items-center gap-1">
                                                     {t('proxy.config.auth.title')}
                                                     <HelpTooltip
@@ -946,7 +1023,7 @@ export default function ApiProxy() {
                                                 </span>
                                             </label>
                                             <label className="flex items-center cursor-pointer gap-2">
-                                                <span className="text-[11px] text-gray-600 dark:text-gray-400 inline-flex items-center gap-1">
+                                                <span className="text-xs text-gray-600 dark:text-gray-300 inline-flex items-center gap-1">
                                                     {(appConfig.proxy.auth_mode || 'off') !== 'off' ? t('proxy.config.auth.enabled') : t('common.disabled')}
                                                     <HelpTooltip
                                                         text={t('proxy.config.auth.enabled_tooltip')}
@@ -956,7 +1033,7 @@ export default function ApiProxy() {
                                                 </span>
                                                 <input
                                                     type="checkbox"
-                                                    className="toggle toggle-sm bg-gray-200 dark:bg-gray-700 border-gray-300 dark:border-gray-600 checked:bg-blue-500 checked:border-blue-500 disabled:opacity-50 disabled:bg-gray-100 dark:disabled:bg-gray-800"
+                                                    className="toggle toggle-sm bg-gray-200 dark:bg-base-300 border-gray-300 dark:border-base-300 checked:bg-blue-600 checked:border-blue-600 disabled:opacity-50 disabled:bg-gray-100 dark:disabled:bg-base-200"
                                                     checked={(appConfig.proxy.auth_mode || 'off') !== 'off'}
                                                     onChange={(e) => {
                                                         const nextMode = e.target.checked ? 'all_except_health' : 'off';
@@ -967,7 +1044,7 @@ export default function ApiProxy() {
                                         </div>
 
                                         <div>
-                                            <label className="block text-[11px] text-gray-600 dark:text-gray-400 mb-1">
+                                            <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">
                                                 <span className="inline-flex items-center gap-1">
                                                     {t('proxy.config.auth.mode')}
                                                     <HelpTooltip
@@ -984,14 +1061,14 @@ export default function ApiProxy() {
                                                         auth_mode: e.target.value as ProxyConfig['auth_mode'],
                                                     })
                                                 }
-                                                className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 text-xs text-gray-900 dark:text-base-content focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                                className="w-full px-3 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg bg-white dark:bg-base-200 text-xs text-gray-900 dark:text-base-content focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                                             >
                                                 <option value="off">{t('proxy.config.auth.modes.off')}</option>
                                                 <option value="strict">{t('proxy.config.auth.modes.strict')}</option>
                                                 <option value="all_except_health">{t('proxy.config.auth.modes.all_except_health')}</option>
                                                 <option value="auto">{t('proxy.config.auth.modes.auto')}</option>
                                             </select>
-                                            <p className="mt-0.5 text-[10px] text-gray-500 dark:text-gray-400">
+                                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                                 {t('proxy.config.auth.hint')}
                                             </p>
                                         </div>
@@ -1000,8 +1077,8 @@ export default function ApiProxy() {
                             </div>
 
                             {/* API 密钥 */}
-                            <div>
-                                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            <div className="border-t border-gray-100 dark:border-base-200 pt-3.5 mt-3.5">
+                                <label className="block text-xs font-semibold text-gray-700 dark:text-gray-200 mb-1.5">
                                     <span className="inline-flex items-center gap-1">
                                         {t('proxy.config.api_key')}
                                         <HelpTooltip
@@ -1017,66 +1094,66 @@ export default function ApiProxy() {
                                         value={isEditingApiKey ? tempApiKey : (appConfig.proxy.api_key)}
                                         onChange={(e) => isEditingApiKey && setTempApiKey(e.target.value)}
                                         readOnly={!isEditingApiKey}
-                                        className={`flex-1 px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg text-xs font-mono ${isEditingApiKey
-                                            ? 'bg-white dark:bg-base-200 text-gray-900 dark:text-base-content'
-                                            : 'bg-gray-50 dark:bg-base-300 text-gray-600 dark:text-gray-400'
+                                        className={`flex-1 px-3 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg text-xs font-mono transition-colors ${isEditingApiKey
+                                            ? 'bg-white dark:bg-base-100 text-gray-900 dark:text-base-content focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                                            : 'bg-gray-50 dark:bg-base-200 text-gray-700 dark:text-gray-300'
                                             }`}
                                     />
                                     {isEditingApiKey ? (
                                         <>
                                             <button
                                                 onClick={handleSaveApiKey}
-                                                className="px-2.5 py-1.5 border border-green-300 dark:border-green-700 rounded-lg bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors text-green-600 dark:text-green-400"
+                                                className="px-2.5 py-1.5 border border-emerald-300 dark:border-emerald-700 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors text-emerald-600 dark:text-emerald-400 shadow-2xs"
                                                 title={t('proxy.config.btn_save')}
                                             >
-                                                <CheckCircle size={14} />
+                                                <CheckCircle size={15} />
                                             </button>
                                             <button
                                                 onClick={handleCancelEditApiKey}
-                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors"
+                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors text-gray-600 dark:text-gray-300 shadow-2xs"
                                                 title={t('common.cancel')}
                                             >
-                                                <X size={14} />
+                                                <X size={15} />
                                             </button>
                                         </>
                                     ) : (
                                         <>
                                             <button
                                                 onClick={handleEditApiKey}
-                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors"
+                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors text-gray-600 dark:text-gray-300 shadow-2xs"
                                                 title={t('proxy.config.btn_edit')}
                                             >
-                                                <Edit2 size={14} />
+                                                <Edit2 size={15} />
                                             </button>
                                             <button
                                                 onClick={handleGenerateApiKey}
-                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors"
+                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors text-gray-600 dark:text-gray-300 shadow-2xs"
                                                 title={t('proxy.config.btn_regenerate')}
                                             >
-                                                <RefreshCw size={14} />
+                                                <RefreshCw size={15} />
                                             </button>
                                             <button
                                                 onClick={() => copyToClipboardHandler(appConfig.proxy.api_key, 'api_key')}
-                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors"
+                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors text-gray-600 dark:text-gray-300 shadow-2xs"
                                                 title={t('proxy.config.btn_copy')}
                                             >
                                                 {copied === 'api_key' ? (
-                                                    <CheckCircle size={14} className="text-green-500" />
+                                                    <CheckCircle size={15} className="text-emerald-500" />
                                                 ) : (
-                                                    <Copy size={14} />
+                                                    <Copy size={15} />
                                                 )}
                                             </button>
                                         </>
                                     )}
                                 </div>
-                                <p className="mt-0.5 text-[10px] text-amber-600 dark:text-amber-500">
+                                <p className="mt-1 text-xs text-amber-600 dark:text-amber-400 font-medium">
                                     {t('proxy.config.warning_key')}
                                 </p>
                             </div>
 
                             {/* Web UI 管理密码 */}
-                            <div className="border-t border-gray-200 dark:border-base-300 pt-3 mt-3">
-                                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            <div className="border-t border-gray-100 dark:border-base-200 pt-3.5 mt-3.5">
+                                <label className="block text-xs font-semibold text-gray-700 dark:text-gray-200 mb-1.5">
                                     <span className="inline-flex items-center gap-1">
                                         {t('proxy.config.admin_password', { defaultValue: 'Web UI Login Password' })}
                                         <HelpTooltip
@@ -1093,72 +1170,84 @@ export default function ApiProxy() {
                                         onChange={(e) => isEditingAdminPassword && setTempAdminPassword(e.target.value)}
                                         readOnly={!isEditingAdminPassword}
                                         placeholder={t('proxy.config.admin_password_placeholder', { defaultValue: 'Enter new password or leave empty to use API Key' })}
-                                        className={`flex-1 px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg text-xs font-mono ${isEditingAdminPassword
-                                            ? 'bg-white dark:bg-base-200 text-gray-900 dark:text-base-content'
-                                            : 'bg-gray-50 dark:bg-base-300 text-gray-600 dark:text-gray-400'
+                                        className={`flex-1 px-3 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg text-xs font-mono transition-colors ${isEditingAdminPassword
+                                            ? 'bg-white dark:bg-base-100 text-gray-900 dark:text-base-content focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500'
+                                            : 'bg-gray-50 dark:bg-base-200 text-gray-700 dark:text-gray-300'
                                             }`}
                                     />
                                     {isEditingAdminPassword ? (
                                         <>
                                             <button
                                                 onClick={handleSaveAdminPassword}
-                                                className="px-2.5 py-1.5 border border-green-300 dark:border-green-700 rounded-lg bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors text-green-600 dark:text-green-400"
+                                                className="px-2.5 py-1.5 border border-emerald-300 dark:border-emerald-700 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors text-emerald-600 dark:text-emerald-400 shadow-2xs"
                                                 title={t('proxy.config.btn_save')}
                                             >
-                                                <CheckCircle size={14} />
+                                                <CheckCircle size={15} />
                                             </button>
                                             <button
                                                 onClick={handleCancelEditAdminPassword}
-                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors"
+                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors text-gray-600 dark:text-gray-300 shadow-2xs"
                                                 title={t('common.cancel')}
                                             >
-                                                <X size={14} />
+                                                <X size={15} />
                                             </button>
                                         </>
                                     ) : (
                                         <>
                                             <button
                                                 onClick={handleEditAdminPassword}
-                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors"
+                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors text-gray-600 dark:text-gray-300 shadow-2xs"
                                                 title={t('proxy.config.btn_edit')}
                                             >
-                                                <Edit2 size={14} />
+                                                <Edit2 size={15} />
                                             </button>
                                             <button
                                                 onClick={() => copyToClipboardHandler(appConfig.proxy.admin_password || appConfig.proxy.api_key, 'admin_password')}
-                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors"
+                                                className="px-2.5 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg bg-white dark:bg-base-200 hover:bg-gray-50 dark:hover:bg-base-300 transition-colors text-gray-600 dark:text-gray-300 shadow-2xs"
                                                 title={t('proxy.config.btn_copy')}
                                             >
                                                 {copied === 'admin_password' ? (
-                                                    <CheckCircle size={14} className="text-green-500" />
+                                                    <CheckCircle size={15} className="text-emerald-500" />
                                                 ) : (
-                                                    <Copy size={14} />
+                                                    <Copy size={15} />
                                                 )}
                                             </button>
                                         </>
                                     )}
                                 </div>
-                                <p className="mt-0.5 text-[10px] text-gray-500 dark:text-gray-400">
+                                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                     {t('proxy.config.admin_password_hint', { defaultValue: 'For safety in Docker/Browser environments, you can set a separate login password from your API Key.' })}
                                 </p>
                             </div>
 
                             {/* User-Agent Overrides */}
-                            <div className="border-t border-gray-200 dark:border-base-300 pt-3 mt-3">
+                            <div className="border-t border-gray-100 dark:border-base-200 pt-3.5 mt-3.5">
                                 <div className="flex items-center justify-between mb-2">
-                                    <label className="text-xs font-medium text-gray-700 dark:text-gray-300 inline-flex items-center gap-1">
+                                    <label className="text-xs font-semibold text-gray-700 dark:text-gray-200 inline-flex items-center gap-1">
                                         {t('proxy.config.request.user_agent', { defaultValue: 'User-Agent Override' })}
                                         <HelpTooltip text={t('proxy.config.request.user_agent_tooltip', { defaultValue: 'Override the User-Agent header sent to upstream APIs.' })} />
                                     </label>
                                     <input
                                         type="checkbox"
-                                        className="toggle toggle-sm bg-gray-200 dark:bg-gray-700 border-gray-300 dark:border-gray-600 checked:bg-blue-500 checked:border-blue-500"
+                                        className="toggle toggle-sm bg-gray-200 dark:bg-base-300 border-gray-300 dark:border-base-300 checked:bg-blue-600 checked:border-blue-600"
                                         checked={!!appConfig.proxy.user_agent_override}
                                         onChange={(e) => {
                                             const enabled = e.target.checked;
                                             if (enabled) {
-                                                // Restore saved override from config or use default
-                                                const restoredValue = appConfig.proxy.saved_user_agent || 'antigravity/1.15.8 darwin/arm64';
+                                                // Restore saved override from config or use modern default
+                                                const defaultUA = 'antigravity/4.3.0 darwin/arm64';
+                                                let restoredValue = appConfig.proxy.saved_user_agent || defaultUA;
+                                                const match = restoredValue.match(/(antigravity[/v\s]+)(\d+(?:\.\d+)+)/i);
+                                                if (match) {
+                                                    const parts = match[2].split('.').map(Number);
+                                                    const major = parts[0] || 0;
+                                                    const minor = parts[1] || 0;
+                                                    if (major < 4 || (major === 4 && minor < 3)) {
+                                                        restoredValue = restoredValue.replace(match[0], `${match[1]}4.3.0`);
+                                                    }
+                                                } else if (restoredValue.includes('1.15.8')) {
+                                                    restoredValue = restoredValue.replace('1.15.8', '4.3.0');
+                                                }
                                                 updateProxyConfig({
                                                     user_agent_override: restoredValue,
                                                     saved_user_agent: restoredValue
@@ -1183,36 +1272,73 @@ export default function ApiProxy() {
                                                     saved_user_agent: newValue
                                                 });
                                             }}
-                                            className="w-full px-2.5 py-1.5 border border-gray-300 dark:border-base-200 rounded-lg bg-white dark:bg-base-200 text-xs font-mono text-gray-900 dark:text-base-content focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            className="w-full px-3 py-1.5 border border-gray-300 dark:border-base-300 rounded-lg bg-white dark:bg-base-200 text-xs font-mono text-gray-900 dark:text-base-content focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                                             placeholder={t('proxy.config.request.user_agent_placeholder', { defaultValue: 'Enter custom User-Agent string...' })}
                                         />
-                                        <div className="bg-gray-50 dark:bg-base-300 rounded p-2 text-[10px] text-gray-500 font-mono break-all">
-                                            <span className="font-bold select-none mr-2">{t('common.example', { defaultValue: 'Example' })}:</span>
-                                            antigravity/1.15.8 darwin/arm64
+                                        <div className="bg-gray-50 dark:bg-base-200 border border-gray-200 dark:border-base-300 rounded-lg p-2.5 text-xs text-gray-600 dark:text-gray-400 font-mono break-all">
+                                            <span className="font-bold text-gray-700 dark:text-gray-300 select-none mr-2">{t('common.example', { defaultValue: 'Example' })}:</span>
+                                            antigravity/4.3.0 darwin/arm64
                                         </div>
                                     </div>
                                 )}
                             </div>
 
 
-                        </div>
+                            </div>
+                        )}
+
+                        {/* TAB 2: CLI 一键配置 (cli) */}
+                        {activeMenuTab === 'cli' && (
+                            <div className="p-4">
+                                <div className="bg-gray-50/60 dark:bg-base-200/50 rounded-xl p-3 border border-gray-200/60 dark:border-base-300">
+                                    <CliSyncCard
+                                        proxyUrl={status.running ? status.base_url : `http://127.0.0.1:${appConfig.proxy.port || 8045}`}
+                                        apiKey={appConfig.proxy.api_key}
+                                    />
+                                </div>
+                            </div>
+                        )}
+
+                        {/* TAB 3: 多协议支持 (protocols) */}
+                        {activeMenuTab === 'protocols' && (
+                            <div className="p-4 space-y-6">
+                                {renderMultiProtocolSection()}
+                                {renderSupportedModelsSection()}
+                            </div>
+                        )}
                     </div>
                 )}
 
-                {/* External Providers Integration */}
+                {/* External Providers Integration - 仅在服务配置 Tab 下展示 */}
                 {
-                    !configLoading && !configError && appConfig && (
+                    !configLoading && !configError && appConfig && activeMenuTab === 'settings' && (
                         <div className="space-y-4">
+                            {/* 思考设置 (Thinking & Reasoning Settings) */}
                             <CollapsibleCard
-                                title={t('proxy.cli_sync.title', { defaultValue: 'CLI Sync' })}
-                                icon={<Terminal size={18} className="text-gray-500" />}
-                                defaultExpanded={false}
+                                title={t('proxy.config.thinking_settings.title', { defaultValue: '思考设置 (Thinking Settings)' })}
+                                icon={<BrainCircuit size={18} className="text-purple-500" />}
+                                defaultExpanded={true}
                             >
-                                <CliSyncCard
-                                    proxyUrl={status.running ? status.base_url : `http://127.0.0.1:${appConfig.proxy.port || 8045}`}
-                                    apiKey={appConfig.proxy.api_key}
+                                <ThinkingBudget
+                                    config={appConfig.proxy.thinking_budget}
+                                    onChange={(tbConfig) => updateProxyConfig({ thinking_budget: tbConfig })}
+                                    onSave={handleSaveProxySettings}
+                                    thinkingStoreEnabled={appConfig.proxy.experimental?.thinking_store_enabled !== false}
+                                    onThinkingStoreChange={(enabled) =>
+                                        updateExperimentalConfig({ thinking_store_enabled: enabled })
+                                    }
+                                    thinkingMaxMemoryTurns={appConfig.proxy.experimental?.thinking_max_memory_turns ?? 600}
+                                    onThinkingMaxMemoryTurnsChange={(turns: number) =>
+                                        updateExperimentalConfig({ thinking_max_memory_turns: turns })
+                                    }
+                                    thinkingRetentionDays={appConfig.proxy.experimental?.thinking_retention_days ?? 15}
+                                    onThinkingRetentionDaysChange={(days: number) =>
+                                        updateExperimentalConfig({ thinking_retention_days: days })
+                                    }
                                 />
                             </CollapsibleCard>
+
+
 
                             {/* Account Scheduling & Rotation */}
                             <CollapsibleCard
@@ -1275,7 +1401,7 @@ export default function ApiProxy() {
                                         </div>
 
                                         <div className="space-y-4 pt-1">
-                                            <div className="bg-slate-100 dark:bg-slate-800/80 rounded-xl p-4 border border-slate-200 dark:border-slate-700">
+                                            <div className="bg-gray-50/70 dark:bg-base-200 rounded-xl p-4 border border-gray-100 dark:border-base-300">
                                                 <div className="flex items-center justify-between mb-2">
                                                     <label className="text-xs font-medium text-gray-700 dark:text-gray-300 inline-flex items-center gap-1">
                                                         {t('proxy.config.scheduling.max_wait')}
@@ -1383,15 +1509,25 @@ export default function ApiProxy() {
                                 </div>
                             </CollapsibleCard>
 
-                            {/* Advanced Thinking & Global Config */}
+                            {/* 全局提示词与多模态设置 (Global Prompt & Multimodal Config) */}
                             <CollapsibleCard
-                                title={t('settings.advanced_thinking.title', { defaultValue: 'Advanced Thinking & Global Config' })}
-                                icon={<BrainCircuit size={18} className="text-pink-500" />}
+                                title={t('proxy.config.prompt_multimodal.title', { defaultValue: '全局提示词与多模态设置 (Prompt & Multimodal)' })}
+                                icon={<Sparkles size={18} className="text-pink-500" />}
                             >
-                                <AdvancedThinking
-                                    config={appConfig.proxy}
-                                    onChange={(newProxyConfig) => updateProxyConfig(newProxyConfig)}
-                                />
+                                <div className="space-y-4">
+                                    {/* 图像思维模式 */}
+                                    <ImageThinkingMode
+                                        value={appConfig.proxy.image_thinking_mode || 'enabled'}
+                                        onChange={(newValue) => updateProxyConfig({ image_thinking_mode: newValue })}
+                                    />
+                                    {/* 全局系统提示词 */}
+                                    <div className="pt-4 border-t border-gray-100 dark:border-base-300">
+                                        <GlobalSystemPrompt
+                                            config={appConfig.proxy.global_system_prompt || { enabled: false, content: '' }}
+                                            onChange={(newConfig) => updateProxyConfig({ global_system_prompt: newConfig })}
+                                        />
+                                    </div>
+                                </div>
                             </CollapsibleCard>
 
                             {/* 实验性设置 */}
@@ -1496,97 +1632,13 @@ export default function ApiProxy() {
                                             </div>
                                         </>
                                     )}
-
-                                    <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-base-200 rounded-xl border border-gray-100 dark:border-base-300">
-                                        <div className="space-y-1">
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-sm font-bold text-gray-900 dark:text-base-content">
-                                                    {t('proxy.config.experimental.payload_storage_mode_label', { defaultValue: '监控报文存储模式' })}
-                                                </span>
-                                                <HelpTooltip text={t('proxy.config.experimental.payload_storage_mode_tooltip', { defaultValue: '简要模式只把思考块、用量、会话标识和精简对话写入 SQLite；完整模式保存原文。请求头中的 API Key 始终脱敏，会话 ID 会原样保留便于运维对比。' })} />
-                                            </div>
-                                            <p className="text-[10px] text-gray-500 dark:text-gray-400 max-w-lg">
-                                                {t('proxy.config.experimental.payload_storage_mode_desc', { defaultValue: '默认简要存储，避免工具参数和图片把日志库撑爆。需要对照原文时再切到完整模式。' })}
-                                            </p>
-                                        </div>
-                                        <select
-                                            className="select select-sm select-bordered w-48 text-xs font-normal focus:outline-none dark:bg-base-300 dark:text-base-content border-gray-200 dark:border-base-400"
-                                            value={appConfig.proxy.experimental?.payload_storage_mode || 'simple'}
-                                            onChange={(e) => updateExperimentalConfig({ payload_storage_mode: e.target.value as 'simple' | 'full' })}
-                                        >
-                                            <option value="simple" className="text-xs dark:bg-base-300">{t('proxy.config.experimental.payload_mode_simple', { defaultValue: '简要 (默认)' })}</option>
-                                            <option value="full" className="text-xs dark:bg-base-300">{t('proxy.config.experimental.payload_mode_full', { defaultValue: '完整原文' })}</option>
-                                        </select>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                        <div className="flex flex-col gap-1 p-4 bg-gray-50 dark:bg-base-200 rounded-xl border border-gray-100 dark:border-base-300">
-                                            <span className="text-sm font-bold text-gray-900 dark:text-base-content">
-                                                {t('proxy.config.experimental.log_retention_days_label', { defaultValue: '请求日志保留天数' })}
-                                            </span>
-                                            <input
-                                                type="number"
-                                                min={1}
-                                                max={3650}
-                                                className="input input-sm input-bordered w-full text-xs"
-                                                value={appConfig.proxy.experimental?.log_retention_days ?? 30}
-                                                onChange={(e) => updateExperimentalConfig({ log_retention_days: Math.max(1, parseInt(e.target.value) || 30) })}
-                                            />
-                                        </div>
-                                        <div className="flex flex-col gap-1 p-4 bg-gray-50 dark:bg-base-200 rounded-xl border border-gray-100 dark:border-base-300">
-                                            <span className="text-sm font-bold text-gray-900 dark:text-base-content">
-                                                {t('proxy.config.experimental.thinking_retention_days_label', { defaultValue: '思考块保留天数（滑动窗口）' })}
-                                            </span>
-                                            <p className="text-[10px] text-gray-500 dark:text-gray-400">
-                                                {t('proxy.config.experimental.thinking_retention_days_desc', { defaultValue: '默认 15 天滑动窗口。只要客户端 sessionID 仍在活跃窗口内，每次请求都会自动刷新过期时间；超过窗口没有请求后才会清理。' })}
-                                            </p>
-                                            <input
-                                                type="number"
-                                                min={1}
-                                                max={3650}
-                                                className="input input-sm input-bordered w-full text-xs"
-                                                value={appConfig.proxy.experimental?.thinking_retention_days ?? 15}
-                                                onChange={(e) => updateExperimentalConfig({ thinking_retention_days: Math.max(1, parseInt(e.target.value) || 15) })}
-                                            />
-                                        </div>
-                                    </div>
                                 </div>
                             </CollapsibleCard>
                         </div>
                     )
                 }
 
-                {/* 模型路由中心 */}
-                {
-                    !configLoading && !configError && appConfig && (
-                        <div className="bg-white dark:bg-base-100 rounded-xl shadow-sm border border-gray-100 dark:border-base-200 overflow-hidden">
-                            <div className="px-4 py-3 border-b border-gray-100 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-800/50">
-                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                                    <div className="flex-1">
-                                        <h2 className="text-base font-bold flex items-center gap-2 text-gray-900 dark:text-base-content">
-                                            <BrainCircuit size={18} className="text-blue-500" />
-                                            {t('proxy.router.title')}
-                                        </h2>
-                                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-xl leading-relaxed">
-                                            {t('proxy.router.subtitle_simple')}
-                                        </p>
-                                    </div>
-                                    <div className="flex flex-wrap items-center gap-2.5 bg-white dark:bg-base-100 p-1.5 rounded-xl border border-gray-100 dark:border-gray-700/50 shadow-sm">
-                                        {/* 仅暴露真实配额模型开关 */}
-                                        <label
-                                            className="flex items-center gap-2 px-3 py-1 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/80 dark:bg-base-200 cursor-pointer hover:bg-gray-100 dark:hover:bg-base-300 transition-colors h-9 select-none"
-                                            title={t('proxy.router.only_raw_quota_models_tooltip')}
-                                        >
-                                            <span className="text-xs font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">
-                                                {t('proxy.router.only_raw_quota_models')}
-                                            </span>
-                                            <input
-                                                type="checkbox"
-                                                className="toggle toggle-sm bg-gray-300 dark:bg-gray-700 border-gray-400 dark:border-gray-600 checked:bg-blue-600 checked:border-blue-600 cursor-pointer"
-                                                checked={appConfig.proxy.only_raw_quota_models ?? false}
-                                                onChange={(e) => updateProxyConfig({ only_raw_quota_models: e.target.checked })}
-                                            />
-                                        </label>
+
 
                                         {/* 预设选择下拉框 */}
                                         <div className="relative min-w-[140px]">
@@ -1972,6 +2024,7 @@ export default function ApiProxy() {
 
 
                                 {/* 各种对话框 */}
+
                 <ModalDialog
                     isOpen={isResetConfirmOpen}
                     title={t('proxy.dialog.reset_mapping_title') || '重置映射'}

@@ -157,7 +157,8 @@ pub async fn handle_generate(
     let request_timeout = state.request_timeout;
     let token_manager = state.token_manager;
     let pool_size = token_manager.len();
-    let max_attempts = MAX_RETRY_ATTEMPTS.min(pool_size).max(1);
+    // [FIX #3485] 自适应多账号池与单账号退避最大重试次数 (单账号3次，多账号整池两轮)
+    let max_attempts = crate::proxy::handlers::common::calculate_max_retry_attempts(pool_size);
 
     let mut last_error = String::new();
     let mut last_email: Option<String> = None;
@@ -167,6 +168,7 @@ pub async fn handle_generate(
     let mut image_permit = None;
     let mut failure_statuses = FailureStatusTracker::default();
     let mut used_attempts = 0;
+    let mut retried_without_thinking = false;
 
     let initial_mapped_model = crate::proxy::common::model_mapping::resolve_model_route(
         &model_name,
@@ -305,6 +307,12 @@ pub async fn handle_generate(
                 &mut wrapped_body,
                 &mapped_model,
             );
+        crate::proxy::mappers::prompt_sanitizer::PromptSanitizer::sanitize_gemini_payload(
+            &mut wrapped_body,
+        );
+        crate::proxy::mappers::common_utils::ensure_gemini_payload_ends_with_user(
+            &mut wrapped_body,
+        );
 
         if let Some(ref recorder) = upstream_recorder {
             recorder.set_value(&wrapped_body);
@@ -340,6 +348,7 @@ pub async fn handle_generate(
 
         // [FIX #1522] Inject Anthropic Beta Headers for Claude models
         let mut extra_headers = std::collections::HashMap::new();
+        extra_headers.insert("x-session-id".to_string(), client_session_id.clone());
         if mapped_model.to_lowercase().contains("claude") {
             extra_headers.insert("anthropic-beta".to_string(), "claude-code-20250219,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14".to_string());
             tracing::debug!(
@@ -347,6 +356,14 @@ pub async fn handle_generate(
                 mapped_model
             );
         }
+
+        let preceding_turn_anchor = wrapped_body
+            .get("contents")
+            .and_then(|c| c.as_array())
+            .and_then(|a| a.last())
+            .cloned();
+        let causal_anchor =
+            crate::proxy::thinking_store::compute_causal_anchor(preceding_turn_anchor.as_ref());
 
         let upstream_req_start = std::time::Instant::now();
         let call_result = match upstream
@@ -496,13 +513,15 @@ pub async fn handle_generate(
                 let image_success_manager = token_manager.clone();
                 let image_success_account = account_id.clone();
                 let image_success_model = mapped_model.clone();
+                let causal_anchor_clone = causal_anchor.clone();
                 let stream = async_stream::stream! {
                     let _image_permit = image_permit_for_stream;
                     let mut first_data = first_chunk;
                     let mut meta_sent = false;
                     let mut saw_image_data = false;
                     let mut stream_failed = false;
-                    let mut thinking_acc = crate::proxy::thinking_store::TurnAccumulator::new();
+                    let mut thinking_acc =
+                        crate::proxy::thinking_store::TurnAccumulator::with_anchor(&causal_anchor_clone);
 
                     loop {
                         // [NEW] 阶段 6.2: 补全 __cloudCodeMeta 响应元数据透传
@@ -666,8 +685,14 @@ pub async fn handle_generate(
                         .into_response());
                 } else {
                     // Collect to JSON
-                    use crate::proxy::mappers::gemini::collector::collect_stream_to_json;
-                    match collect_stream_to_json(Box::pin(stream), &s_id).await {
+                    use crate::proxy::mappers::gemini::collector::collect_stream_to_json_with_anchor;
+                    match collect_stream_to_json_with_anchor(
+                        Box::pin(stream),
+                        &s_id,
+                        Some(&causal_anchor),
+                    )
+                    .await
+                    {
                         Ok(gemini_resp) => {
                             info!(
                                 "[{}] ✓ Stream collected and converted to JSON (Gemini)",
@@ -753,7 +778,12 @@ pub async fn handle_generate(
                 }
             }
 
-            crate::proxy::thinking_store::capture_gemini_response(&session_id, &gemini_resp);
+            let preceding_turn = preceding_turn_anchor.as_ref();
+            crate::proxy::thinking_store::capture_gemini_response_with_preceding(
+                &session_id,
+                &gemini_resp,
+                preceding_turn,
+            );
             let unwrapped = unwrap_response(&gemini_resp);
             return Ok(Response::builder()
                 .status(StatusCode::OK)
@@ -837,9 +867,23 @@ pub async fn handle_generate(
             }
         }
 
-        // [FIX] 429 时立即解绑当前会话，确保换号重试与后续请求不会死锁在受限账号上
+        // [FIX session-1M] 上游按 sessionId 在服务端累计会话输入，长工具循环会把累计推过 1M，
+        // 之后该 sessionId 的所有请求都 400 "input token count exceeds ... 1048576"。
+        // 给 (账号, 对话) 的 sessionId 升代并立即重试:新 sessionId = 上游全新会话,对话无感恢复。
+        if status_code == 400 && error_text.contains("exceeds the maximum number of tokens") {
+            let fingerprint = session_id.as_str();
+            let generation = crate::proxy::common::session::bump_session(&account_id, fingerprint);
+            tracing::warn!(
+                "[Gemini] Upstream session token accumulation exceeded 1M on account {}. sessionId bumped to generation {}, retrying with a fresh upstream session.",
+                email, generation
+            );
+            continue; // 重试:下一轮读取新代数,派生全新 sessionId
+        }
+
         if status_code == 429 || status_code == 529 {
-            token_manager.clear_session_binding(&session_id);
+            token_manager
+                .unbind_session_and_clear_last_used(Some(&session_id))
+                .await;
             tracing::debug!(
                 "[Gemini] Unbound session {} from account {} due to status {}",
                 session_id,
@@ -848,15 +892,85 @@ pub async fn handle_generate(
             );
         }
 
-        // 确定重试策略
-        let strategy = retry_state.determine_strategy(
+        let scheduling_mode = token_manager.get_scheduling_mode().await;
+        let allow_grace = match scheduling_mode {
+            crate::proxy::sticky_config::SchedulingMode::Balance => {
+                token_manager.tokens_count() <= 1
+            }
+            crate::proxy::sticky_config::SchedulingMode::CacheFirst => true,
+            crate::proxy::sticky_config::SchedulingMode::PerformanceFirst => false,
+        };
+
+        // 确定重试策略：传入当前 attempt 与 pool_size，执行智能自适应裁决
+        let strategy = retry_state.determine_strategy_adaptive(
             &account_id,
             status_code,
             &error_text,
             retry_after.as_deref(),
-            false,
+            retried_without_thinking,
+            attempt,
+            pool_size,
         );
-        let needs_quota_refresh = if config.request_type == "image_gen" && status_code == 429 {
+        // 统一流水线决策判定：协议无关的限流与错误判定
+        let classification = crate::proxy::pipeline::UpstreamClassification::classify(
+            status_code,
+            &error_text,
+            retry_after.as_deref(),
+        );
+
+        if classification.is_model_not_found() {
+            tracing::warn!(
+                "[Gemini] Target model [{}] not found on upstream (HTTP {}). Terminating retry loop without account lockout.",
+                mapped_model, status_code
+            );
+            return Ok((
+                StatusCode::from_u16(status_code).unwrap_or(StatusCode::NOT_FOUND),
+                [
+                    ("X-Account-Email", email.as_str()),
+                    ("X-Mapped-Model", mapped_model.as_str()),
+                ],
+                error_text,
+            )
+                .into_response());
+        }
+
+        if classification.is_thought_signature_error() {
+            if !retried_without_thinking {
+                retried_without_thinking = true;
+                tracing::warn!(
+                    "[Gemini] Pipeline: Thinking signature error detected on upstream (HTTP {}). Surgically purging corrupted signatures and retrying on same account.",
+                    status_code
+                );
+                // 1. 精准定向净化 ThinkingStore 中的异构污染签名
+                crate::proxy::thinking_store::ThinkingStore::global()
+                    .purge_corrupted_signatures(&session_id, &mapped_model);
+                // 2. 清理当前 session 的 SignatureCache
+                crate::proxy::SignatureCache::global().delete_session_signature(&client_session_id);
+                // 3. 追加修复提示词到请求体的最后一条内容
+                if let Some(contents) = body.get_mut("contents").and_then(|v| v.as_array_mut()) {
+                    if let Some(last_content) = contents.last_mut() {
+                        if let Some(parts) =
+                            last_content.get_mut("parts").and_then(|v| v.as_array_mut())
+                        {
+                            parts.push(json!({
+                                "text": "\n\n[System Recovery] Your previous output contained an invalid signature. Please regenerate the response without the corrupted signature block."
+                            }));
+                            tracing::debug!("[Gemini] Appended repair prompt to last content");
+                        }
+                    }
+                }
+                // 4. 保持同一账号原地重试
+                force_rotate = false;
+                continue;
+            } else {
+                tracing::warn!(
+                    "[Gemini] Pipeline: Thinking signature error persisted after retry without thinking. Terminating retry loop."
+                );
+            }
+        }
+
+        let should_mark_limited = classification.should_lock_account();
+        let needs_quota_refresh = if should_mark_limited {
             token_manager
                 .mark_rate_limited_fast(
                     &email,
@@ -921,35 +1035,6 @@ pub async fn handle_generate(
             }
 
             continue;
-        }
-
-        // [NEW] 处理 400 错误 (Thinking 签名失效)
-        if status_code == 400
-            && (error_text.contains("Invalid `signature`")
-                || error_text.contains("thinking.signature")
-                || error_text.contains("Invalid signature")
-                || error_text.contains("Corrupted thought signature"))
-        {
-            tracing::warn!(
-                "[Gemini] Signature error detected on account {}, retrying without thinking",
-                email
-            );
-
-            // 追加修复提示词到请求体的最后一条内容
-            if let Some(contents) = body.get_mut("contents").and_then(|v| v.as_array_mut()) {
-                if let Some(last_content) = contents.last_mut() {
-                    if let Some(parts) =
-                        last_content.get_mut("parts").and_then(|v| v.as_array_mut())
-                    {
-                        parts.push(json!({
-                            "text": "\n\n[System Recovery] Your previous output contained an invalid signature. Please regenerate the response without the corrupted signature block."
-                        }));
-                        tracing::debug!("[Gemini] Appended repair prompt to last content");
-                    }
-                }
-            }
-
-            continue; // 重试
         }
 
         // 404 等由于模型配置或路径错误的 HTTP 异常，直接报错，不进行无效轮换

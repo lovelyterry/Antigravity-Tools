@@ -71,11 +71,20 @@ jobs:
           $config | ConvertTo-Json -Depth 32 | Set-Content -Path $configPath -Encoding UTF8
           Write-Host "No updater signing key configured; disabled updater artifacts for this build."
 
+      # 预发布版本降级为仅 NSIS：WiX (MSI) 要求版本号预发布段为纯数字 (≤65535)，
+      # 无法打包 SemVer 预发布串 (如 4.7.14-beta)；NSIS 无此限制。正式版保持默认 bundle 不变。
+      - name: Skip MSI for prerelease tags
+        if: matrix.platform == 'windows-2025' && contains(github.ref_name, '-')
+        shell: pwsh
+        run: |
+          Write-Host "Prerelease tag detected; MSI (WiX) cannot bundle SemVer prerelease versions. Falling back to NSIS only."
+          "PRE_BUNDLE_ARGS=--bundles nsis" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Build the app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build -- ${{ matrix.args }}
+        run: npm run tauri build -- ${{ matrix.args }} ${{ env.PRE_BUNDLE_ARGS }}
 
       # 3. 处理 macOS 架构重命名冲突 (解决 422 Already Exists)
       - name: Rename macOS assets for architecture
@@ -166,10 +175,21 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
           echo "Extracting release notes for version $VERSION"
+          # 版本串按字面匹配 (index 比较，正则元字符不参与解释)，且要求其后紧跟空白，
+          # 确保与 CHANGELOG 标题逐字符对齐，避免 v4.7.14 命中 v4.7.14-beta 等同基线条目。
           awk -v ver="$VERSION" '
-            BEGIN { capture=0 }
-            $0 ~ "^[[:space:]]*[*+-][[:space:]]+\\*\\*" ver { capture=1; next }
-            capture && $0 ~ "^[[:space:]]*[*+-][[:space:]]+\\*\\*v" { capture=0; exit }
+            BEGIN { capture = 0; needle = "**" ver }
+            {
+              if (capture && $0 ~ /^[[:space:]]*[*+-][[:space:]]+\*\*v/) exit
+              if (!capture && $0 ~ /^[[:space:]]*[*+-][[:space:]]+\*\*/) {
+                title = $0
+                sub(/^[[:space:]]*[*+-][[:space:]]+/, "", title)
+                if (index(title, needle) == 1) {
+                  sep = substr(title, length(needle) + 1, 1)
+                  if (sep == " " || sep == "\t") { capture = 1; next }
+                }
+              }
+            }
             capture { print }
           ' CHANGELOG.md | sed 's/^[[:space:]]\{8\}//' > release_notes.md
           if [ ! -s release_notes.md ]; then
@@ -272,6 +292,20 @@ jobs:
           done
           find release-files -maxdepth 1 -type f -print
 
+      # 判定预发布标签 (SemVer 2.0 pre-release: vX.Y.Z-beta.N / -cleaned / -alpha / -rc)
+      # 含 '-' 即视为预发布，避免预发布版本被标记为 Latest 并经由 /releases/latest/updater.json 推送给正式用户
+      - name: Detect prerelease tag
+        id: prerelease
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [[ "$TAG" == *-* ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Detected pre-release tag: $TAG"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "Detected stable tag: $TAG"
+          fi
+
       # 使用 ncipollo/release-action 进行统一发布，支持稳健覆盖
       - name: Create or Update GitHub Release
         uses: ncipollo/release-action@v1
@@ -280,11 +314,13 @@ jobs:
           allowUpdates: true
           name: "Antigravity Tools ${{ github.ref_name }}"
           bodyFile: "release_notes.md"
+          generateReleaseNotes: true
           token: ${{ secrets.GITHUB_TOKEN }}
           artifacts: "release-files/*,updater.json"
           artifactErrorsFailBuild: false
           replacesArtifacts: true
-          makeLatest: legacy
+          prerelease: ${{ steps.prerelease.outputs.is_prerelease }}
+          makeLatest: ${{ steps.prerelease.outputs.is_prerelease == 'true' && 'false' || 'legacy' }}
 
   docker-build-amd64:
     runs-on: ubuntu-latest
@@ -302,6 +338,21 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # 预发布 Tag (含 '-') 不更新 latest-amd64，与 GitHub Release 的 Pre-release 守卫同一语义
+      - name: Resolve Docker tags (AMD64)
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          VER="${{ github.ref_name }}"
+          TAGS="${OWNER}/antigravity-manager:${VER}-amd64"
+          if [[ "$VER" != *-* ]]; then
+            TAGS="${TAGS}"$'\n'"${OWNER}/antigravity-manager:latest-amd64"
+          fi
+          {
+            echo "DOCKER_TAGS<<EOF"
+            echo "$TAGS"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
       - name: Build and push (AMD64)
         uses: docker/build-push-action@v6
         with:
@@ -309,9 +360,7 @@ jobs:
           file: docker/Dockerfile
           platforms: linux/amd64
           push: true
-          tags: |
-            ${{ github.repository_owner }}/antigravity-manager:latest-amd64
-            ${{ github.repository_owner }}/antigravity-manager:${{ github.ref_name }}-amd64
+          tags: ${{ env.DOCKER_TAGS }}
           build-args: |
             USE_MIRROR=false
 
@@ -331,6 +380,21 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # 预发布 Tag (含 '-') 不更新 latest-arm64，与 GitHub Release 的 Pre-release 守卫同一语义
+      - name: Resolve Docker tags (ARM64)
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          VER="${{ github.ref_name }}"
+          TAGS="${OWNER}/antigravity-manager:${VER}-arm64"
+          if [[ "$VER" != *-* ]]; then
+            TAGS="${TAGS}"$'\n'"${OWNER}/antigravity-manager:latest-arm64"
+          fi
+          {
+            echo "DOCKER_TAGS<<EOF"
+            echo "$TAGS"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
       - name: Build and push (ARM64)
         uses: docker/build-push-action@v6
         with:
@@ -338,9 +402,7 @@ jobs:
           file: docker/Dockerfile
           platforms: linux/arm64
           push: true
-          tags: |
-            ${{ github.repository_owner }}/antigravity-manager:latest-arm64
-            ${{ github.repository_owner }}/antigravity-manager:${{ github.ref_name }}-arm64
+          tags: ${{ env.DOCKER_TAGS }}
           build-args: |
             USE_MIRROR=false
 
@@ -357,10 +419,13 @@ jobs:
 
       - name: Create and push manifest
         run: |
-          docker buildx imagetools create -t ${{ github.repository_owner }}/antigravity-manager:latest \
-            ${{ github.repository_owner }}/antigravity-manager:latest-amd64 \
-            ${{ github.repository_owner }}/antigravity-manager:latest-arm64
-
           docker buildx imagetools create -t ${{ github.repository_owner }}/antigravity-manager:${{ github.ref_name }} \
             ${{ github.repository_owner }}/antigravity-manager:${{ github.ref_name }}-amd64 \
             ${{ github.repository_owner }}/antigravity-manager:${{ github.ref_name }}-arm64
+
+          # 预发布 Tag (含 '-') 不更新 latest，避免预发布镜像进入正式更新通道
+          if [[ "${{ github.ref_name }}" != *-* ]]; then
+            docker buildx imagetools create -t ${{ github.repository_owner }}/antigravity-manager:latest \
+              ${{ github.repository_owner }}/antigravity-manager:latest-amd64 \
+              ${{ github.repository_owner }}/antigravity-manager:latest-arm64
+          fi

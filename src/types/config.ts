@@ -14,6 +14,7 @@ export interface ProxyConfig {
     custom_mapping?: Record<string, string>;
     request_timeout: number;
     enable_logging: boolean;
+    capture_health_logs?: boolean;
     log_retention?: LogRetentionConfig;
     debug_logging?: DebugLoggingConfig;
     upstream_proxy: UpstreamProxyConfig;
@@ -31,34 +32,58 @@ export interface ProxyConfig {
 
 export interface LogRetentionConfig {
     max_body_age_hours: number;
-    max_age_days: number;
+    max_storage_gb: number;
+    max_disk_mb?: number;
     max_rows: number;
+    max_age_days?: number;
 }
 
-export interface LogRetentionConfig {
-    max_body_age_hours: number;
-    max_age_days: number;
-    max_rows: number;
-}
 
 // ============================================================================
 // Thinking Budget 配置 (控制 AI 深度思考时的 Token 预算)
 // ============================================================================
 
+/** 思考预算控制权归属 */
+export type ThinkingControlSource = 'gateway' | 'client';
+
 /** Thinking Budget 处理模式 */
-export type ThinkingBudgetMode = 'auto' | 'passthrough' | 'custom' | 'adaptive'; // [NEW] 支持自适应模式
+export type ThinkingBudgetMode = 'default' | 'custom' | 'auto' | 'passthrough' | 'adaptive';
 
 /** Thinking Effort 等级 (仅 adaptive 模式) */
 export type ThinkingEffort = 'low' | 'medium' | 'high';
 
 /** Thinking Budget 配置 */
 export interface ThinkingBudgetConfig {
-    /** 模式选择 */
-    mode: ThinkingBudgetMode;
-    /** 自定义固定值（仅在 mode=custom 时生效），范围 1024-65536 */
-    custom_value: number;
-    /** 思考强度 (仅在 mode=adaptive 时生效) */
+    /** 控制权大选择：网关权威控制 (gateway) vs 客户端直接控制 (client) */
+    control_source?: ThinkingControlSource;
+
+    // --- Gemini Flash 系列配置 ---
+    flash_mode?: ThinkingBudgetMode;
+    flash_low?: number;       // 默认 1000
+    flash_medium?: number;    // 默认 4000
+    flash_high?: number;      // 默认 10000
+    flash_tiered?: number;    // 默认 -1
+
+    // --- Gemini Pro 系列配置（官方仅 Low 与 High 两档） ---
+    pro_mode?: ThinkingBudgetMode;
+    pro_low?: number;         // 默认 1001
+    pro_high?: number;        // 默认 10001
+
+    // --- Claude 系列配置 ---
+    claude_mode?: ThinkingBudgetMode;
+    claude_budget?: number;    // 统一思考预算 (默认 16000, 填 -1 自适应)
+    claude_low?: number;       // 默认 1024
+    claude_medium?: number;    // 默认 4096
+    claude_high?: number;      // 默认 16000
+
+    // --- 旧版兼容字段 ---
+    mode?: ThinkingBudgetMode;
+    custom_value?: number;
     effort?: ThinkingEffort;
+    custom_low?: number;
+    custom_medium?: number;
+    custom_high?: number;
+    custom_tiered?: number;
 }
 
 // ============================================================================
@@ -135,6 +160,7 @@ export interface ExperimentalConfig {
     log_retention_days?: number;
     thinking_store_enabled?: boolean;
     thinking_retention_days?: number;
+    thinking_max_memory_turns?: number;
 }
 
 export interface CircuitBreakerConfig {
@@ -165,7 +191,31 @@ export interface AppConfig {
     pinned_quota_models: PinnedQuotaModelsConfig; // [NEW] 配额关注列表
     circuit_breaker: CircuitBreakerConfig; // [NEW] 熔断器配置
     proxy: ProxyConfig;
-    cloudflared?: any;
+cloudflared: CloudflaredConfig; // [NEW] Cloudflared 配置
+    lightweight_mode?: boolean; // [NEW] 轻量模式：关闭到托盘时释放 WebView
+}
+
+// ============================================================================
+// Cloudflared (CF隧道) 类型定义
+// ============================================================================
+
+export type TunnelMode = 'quick' | 'auth';
+
+export interface CloudflaredConfig {
+    enabled: boolean;
+    mode: TunnelMode;
+    port: number;
+    token?: string;
+    use_http2: boolean;
+}
+
+export interface CloudflaredStatus {
+    installed: boolean;
+    version?: string;
+    running: boolean;
+    url?: string;
+    error?: string;
+
 }
 
 // ============================================================================

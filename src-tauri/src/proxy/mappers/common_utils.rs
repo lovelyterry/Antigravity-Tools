@@ -1154,57 +1154,6 @@ mod tests {
     }
 }
 
-pub fn sanitize_system_prompt_for_tokens(text: &str) -> String {
-    use regex::Regex;
-    let mut cleaned = text.to_string();
-
-    // [CACHE] Step 1: 剥离动态内容（时间戳、UUID），确保跨请求的前缀一致性
-    // 这对 Gemini 隐式前缀缓存命中至关重要
-    let time_patterns = [
-        r"(?im)^Current (date|time)(\s+is)?\s*:.*$",
-        r"(?im)^Today is\s*:.*$",
-        r"(?im)^Date:\s+\d{4}-\d{2}-\d{2}.*$",
-    ];
-    for pat in &time_patterns {
-        if let Ok(re) = Regex::new(pat) {
-            cleaned = re.replace_all(&cleaned, "").into_owned();
-        }
-    }
-
-    // 剥离 UUID
-    if let Ok(re) = Regex::new(r"\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b")
-    {
-        cleaned = re.replace_all(&cleaned, "{uuid}").into_owned();
-    }
-
-    // 剥离随机 request/session/trace ID
-    if let Ok(re) = Regex::new(r"\b(req|sid|trace)_[a-f0-9]{6,32}\b") {
-        cleaned = re.replace_all(&cleaned, "{id}").into_owned();
-    }
-
-    // Step 2: Compress massive XML tags injected by thick clients to save tokens
-
-    let tags_to_compress = [
-        "skills_instructions",
-        "skills",
-        "plugins",
-        "subagents",
-        "customizations",
-        "conversation_transcript",
-        "guidelines",
-    ];
-
-    for tag in tags_to_compress.iter() {
-        let pattern = format!(r"(?s)<{}>.*?</{}>", tag, tag);
-        if let Ok(re) = Regex::new(&pattern) {
-            let replacement = format!("<{}>\n[Omitted by Antigravity Proxy to save tokens. Tool definitions remain available.]\n</{}>", tag, tag);
-            cleaned = re.replace_all(&cleaned, replacement).into_owned();
-        }
-    }
-
-    cleaned
-}
-
 /// [FIX] Parse markdown base64 images from text and split into Gemini parts
 /// This prevents base64 reflection bloat where generated images are sent back as huge text strings
 pub fn parse_markdown_images_to_parts(text: &str) -> Vec<Value> {
@@ -1469,11 +1418,8 @@ pub fn is_model_compatible(cached: &str, target: &str) -> bool {
         return true;
     }
 
-    // Grouped family match (Claude models are more permissive)
-    if c.contains("claude-3-5") && t.contains("claude-3-5") {
-        return true;
-    }
-    if c.contains("claude-3-7") && t.contains("claude-3-7") {
+    // Claude 全系列通用兼容：凡是同属 Claude 家族模型，直接判定签名兼容（面向未来任何 Claude 5/新模型及变体）
+    if c.contains("claude") && t.contains("claude") {
         return true;
     }
 
@@ -1515,4 +1461,287 @@ pub fn is_model_compatible(cached: &str, target: &str) -> bool {
 pub fn model_keeps_thinking_without_signature(mapped_model: &str) -> bool {
     let m = mapped_model.to_lowercase();
     m.contains("flash") || m.contains("gemini-pro-agent")
+}
+
+/// [JEIKCODE SYNTHETIC USER REMINDER]
+/// 将对话中途动态插入的系统消息就地包装为 `<system-reminder>` 标签块。
+/// 提示词采用英文，明确告知模型：本内容为系统层注入的背景提醒，并非本轮用户输入，
+/// 从而保证用户原始 query 完整透传，同时全局顶层 systemInstruction 保持绝对冻结以稳定 KV Cache。
+pub fn wrap_in_system_reminder(content: &str) -> String {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.starts_with("<system-reminder>") && trimmed.ends_with("</system-reminder>") {
+        return trimmed.to_string();
+    }
+    format!(
+        "<system-reminder>\nBefore the user's request for this turn, the system provides the following reminder for your awareness. Please note that this is from prior system messages, not spoken by the user:\n{}\n</system-reminder>",
+        trimmed
+    )
+}
+
+/// [DEFENSE] 通用中转报文保底文本（温和提示继续分析，避免触发 Agent 误进入修改阶段）
+pub const TRANSIT_DEFENSE_FALLBACK_TEXT: &str = "Please continue your analysis.";
+
+/// [DEFENSE] 通用中转报文保底防御节点（协议无关性）
+/// 确保发给 Google Gemini 的报文末尾轮次严格符合规范：
+/// 1. 自动兼容平铺 payload 或包含 "request" 包装的 payload；
+/// 2. 若 contents 为空，追加 {"role": "user", "parts": [{"text": TRANSIT_DEFENSE_FALLBACK_TEXT}]}；
+/// 3. 若末尾轮次为 "model"（缺失用户轮次），追加 {"role": "user", "parts": [{"text": TRANSIT_DEFENSE_FALLBACK_TEXT}]}；
+/// 4. 若末尾轮次为 "user" 且其 parts 为空、或仅含有空文本 / "(no content)" / "·" 且无工具/图片，规范化填充为 [{"text": TRANSIT_DEFENSE_FALLBACK_TEXT}]；
+/// 5. 修复中间轮次中 parts 为空的情况，防止 Google 返回 400 "parts must not be empty"。
+pub fn ensure_gemini_payload_ends_with_user(body: &mut Value) -> bool {
+    let contents = if let Some(contents) = body
+        .get_mut("request")
+        .and_then(|r| r.get_mut("contents"))
+        .and_then(|c| c.as_array_mut())
+    {
+        contents
+    } else if let Some(contents) = body.get_mut("contents").and_then(|c| c.as_array_mut()) {
+        contents
+    } else {
+        return false;
+    };
+
+    let mut modified = false;
+
+    // 防御 1: contents 整体为空
+    if contents.is_empty() {
+        tracing::warn!("[Defense] Gemini contents array is empty, appending fallback user turn");
+        contents.push(json!({
+            "role": "user",
+            "parts": [{ "text": TRANSIT_DEFENSE_FALLBACK_TEXT }]
+        }));
+        return true;
+    }
+
+    // 防御 2: 修复历史/中间轮次中可能存在的 parts 为空
+    for turn in contents.iter_mut() {
+        let is_model = turn
+            .get("role")
+            .and_then(|r| r.as_str())
+            .map(|r| r == "model" || r == "assistant")
+            .unwrap_or(false);
+        if let Some(parts) = turn.get_mut("parts").and_then(|p| p.as_array_mut()) {
+            if parts.is_empty() {
+                modified = true;
+                if is_model {
+                    parts.push(json!({ "text": "..." }));
+                } else {
+                    parts.push(json!({ "text": TRANSIT_DEFENSE_FALLBACK_TEXT }));
+                }
+            }
+        }
+    }
+
+    // 防御 3: 检查末尾轮次
+    let need_append_user = if let Some(last_turn) = contents.last_mut() {
+        let role = last_turn.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        if role == "model" || role == "assistant" {
+            true
+        } else {
+            if let Some(parts) = last_turn.get_mut("parts").and_then(|p| p.as_array_mut()) {
+                let has_substantive_part = parts.iter().any(|part| {
+                    if part.get("functionCall").is_some()
+                        || part.get("functionResponse").is_some()
+                        || part.get("inlineData").is_some()
+                        || part.get("fileData").is_some()
+                    {
+                        return true;
+                    }
+                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                        let t = text.trim();
+                        !t.is_empty() && t != "(no content)" && t != "·"
+                    } else {
+                        false
+                    }
+                });
+
+                if !has_substantive_part {
+                    tracing::warn!(
+                        "[Defense] Last user turn has no substantive content, normalizing to '{}'",
+                        TRANSIT_DEFENSE_FALLBACK_TEXT
+                    );
+                    *parts = vec![json!({ "text": TRANSIT_DEFENSE_FALLBACK_TEXT })];
+                    modified = true;
+                }
+            }
+            false
+        }
+    } else {
+        false
+    };
+
+    if need_append_user {
+        tracing::warn!(
+            "[Defense] Gemini payload ended with model turn, appending user turn with '{}'",
+            TRANSIT_DEFENSE_FALLBACK_TEXT
+        );
+        contents.push(json!({
+            "role": "user",
+            "parts": [{ "text": TRANSIT_DEFENSE_FALLBACK_TEXT }]
+        }));
+        modified = true;
+    }
+
+    modified
+}
+
+/// 安全地按最大字节数截断字符串切片，保证切片边界严格对齐在 UTF-8 字符边界上。
+/// 若 max_bytes 恰好落在多字节字符中间，会自动向左回退到最近的合法字符边界。
+pub fn safe_truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// 安全地按最大字符数 (Unicode 标量值) 截断字符串切片。
+/// 如果字符总数超过 max_chars，截取前 max_chars 个字符对应的有效切片。
+pub fn safe_truncate_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => &s[..byte_idx],
+        None => s,
+    }
+}
+
+#[cfg(test)]
+mod defense_tests {
+    use super::*;
+
+    #[test]
+    fn test_ensure_gemini_payload_ends_with_user_empty() {
+        let mut payload = json!({
+            "contents": []
+        });
+        assert!(ensure_gemini_payload_ends_with_user(&mut payload));
+        let contents = payload["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 1);
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(
+            contents[0]["parts"][0]["text"],
+            TRANSIT_DEFENSE_FALLBACK_TEXT
+        );
+    }
+
+    #[test]
+    fn test_ensure_gemini_payload_ends_with_user_model_ending() {
+        let mut payload = json!({
+            "request": {
+                "contents": [
+                    { "role": "user", "parts": [{ "text": "hello" }] },
+                    { "role": "model", "parts": [{ "text": "hi there" }] }
+                ]
+            }
+        });
+        assert!(ensure_gemini_payload_ends_with_user(&mut payload));
+        let contents = payload["request"]["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 3);
+        assert_eq!(contents[2]["role"], "user");
+        assert_eq!(
+            contents[2]["parts"][0]["text"],
+            TRANSIT_DEFENSE_FALLBACK_TEXT
+        );
+    }
+
+    #[test]
+    fn test_ensure_gemini_payload_ends_with_user_no_content() {
+        let mut payload = json!({
+            "contents": [
+                { "role": "user", "parts": [{ "text": "(no content)" }] }
+            ]
+        });
+        assert!(ensure_gemini_payload_ends_with_user(&mut payload));
+        let contents = payload["contents"].as_array().unwrap();
+        assert_eq!(contents.len(), 1);
+        assert_eq!(
+            contents[0]["parts"][0]["text"],
+            TRANSIT_DEFENSE_FALLBACK_TEXT
+        );
+    }
+
+    #[test]
+    fn test_ensure_gemini_payload_ends_with_user_valid_untouched() {
+        let mut payload = json!({
+            "contents": [
+                { "role": "user", "parts": [{ "text": "valid message" }] }
+            ]
+        });
+        assert!(!ensure_gemini_payload_ends_with_user(&mut payload));
+        let contents = payload["contents"].as_array().unwrap();
+        assert_eq!(contents[0]["parts"][0]["text"], "valid message");
+    }
+
+    #[test]
+    fn test_wrap_in_system_reminder() {
+        use super::wrap_in_system_reminder;
+
+        // Empty content returns empty string
+        assert_eq!(wrap_in_system_reminder("   "), "");
+
+        // Raw text gets wrapped with English reminder header
+        let wrapped = wrap_in_system_reminder("Current date: 2026-09-19");
+        assert!(wrapped.starts_with("<system-reminder>\nBefore the user's request for this turn"));
+        assert!(wrapped.contains("Current date: 2026-09-19"));
+        assert!(wrapped.ends_with("</system-reminder>"));
+
+        // Already wrapped content is untouched (no double wrapping)
+        let already = "<system-reminder>\nsome text\n</system-reminder>";
+        assert_eq!(wrap_in_system_reminder(already), already);
+    }
+
+    #[test]
+    fn test_safe_truncate_str_utf8_boundaries() {
+        // "你好世界" 每个汉字 3 字节，共 12 字节:
+        // '你': 0..3, '好': 3..6, '世': 6..9, '界': 9..12
+        let text = "你好世界";
+        assert_eq!(safe_truncate_str(text, 0), "");
+        assert_eq!(safe_truncate_str(text, 1), ""); // 落在 '你' 中间，回退到 0
+        assert_eq!(safe_truncate_str(text, 2), ""); // 落在 '你' 中间，回退到 0
+        assert_eq!(safe_truncate_str(text, 3), "你");
+        assert_eq!(safe_truncate_str(text, 4), "你"); // 落在 '好' 中间，回退到 3
+        assert_eq!(safe_truncate_str(text, 5), "你");
+        assert_eq!(safe_truncate_str(text, 6), "你好");
+        assert_eq!(safe_truncate_str(text, 12), "你好世界");
+        assert_eq!(safe_truncate_str(text, 100), "你好世界");
+
+        // 验证 Issue #3493 场景：第 57 字节落在 3 字节中文字符内部
+        // 构造 55 字节 ASCII + "中文测试"（每个 3 字节）
+        // "中文测试" 从索引 55 开始: '中' (55..58)
+        // 索引 57 正好落在 '中' 的中间 (55..58)
+        let mut s3493 = "a".repeat(55);
+        s3493.push_str("中文测试");
+        assert!(!s3493.is_char_boundary(57));
+        let truncated = safe_truncate_str(&s3493, 57);
+        assert_eq!(truncated.len(), 55);
+        assert_eq!(truncated, "a".repeat(55));
+
+        // Emoji 测试 (4 字节: 🦀 0..4)
+        let emoji = "🦀🦀";
+        assert_eq!(safe_truncate_str(emoji, 2), "");
+        assert_eq!(safe_truncate_str(emoji, 4), "🦀");
+        assert_eq!(safe_truncate_str(emoji, 6), "🦀");
+        assert_eq!(safe_truncate_str(emoji, 8), "🦀🦀");
+    }
+
+    #[test]
+    fn test_safe_truncate_chars_utf8() {
+        let text = "你好世界，Rust编程！";
+        assert_eq!(safe_truncate_chars(text, 0), "");
+        assert_eq!(safe_truncate_chars(text, 2), "你好");
+        assert_eq!(safe_truncate_chars(text, 4), "你好世界");
+        assert_eq!(safe_truncate_chars(text, 5), "你好世界，");
+        assert_eq!(safe_truncate_chars(text, 100), text);
+
+        let emoji_text = "🎉Hello世界🦀";
+        assert_eq!(safe_truncate_chars(emoji_text, 1), "🎉");
+        assert_eq!(safe_truncate_chars(emoji_text, 6), "🎉Hello");
+        assert_eq!(safe_truncate_chars(emoji_text, 8), "🎉Hello世界");
+        assert_eq!(safe_truncate_chars(emoji_text, 9), "🎉Hello世界🦀");
+    }
 }

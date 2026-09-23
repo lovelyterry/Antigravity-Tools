@@ -47,11 +47,13 @@
         }
     },
     "aliases": {
+
         "gpt-4o": "gemini-3.8-flash-medium",
         "gpt-3.5-turbo": "gemini-3.8-flash-medium",
         "claude-3-5-sonnet": "gemini-3.8-flash-medium",
         "claude-3-7-sonnet": "gemini-3.8-flash-medium",
         "claude-opus-5": "gemini-3.8-flash-medium",
         "claude-opus-5-thinking": "gemini-3.8-flash-medium"
+
     }
 }
