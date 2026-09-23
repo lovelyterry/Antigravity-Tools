@@ -17,7 +17,6 @@ use crate::proxy::debug_logger;
 use crate::proxy::server::AppState;
 use crate::proxy::upstream::client::mask_email;
 
-const MAX_RETRY_ATTEMPTS: usize = 3;
 const MAX_INPUT_IMAGES: usize = 16;
 const MAX_INPUT_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 const MAX_TOTAL_INPUT_IMAGE_BYTES: usize = 32 * 1024 * 1024;
@@ -2709,7 +2708,7 @@ pub async fn handle_chat_completions(
         }
 
         let scheduling_mode = token_manager.get_scheduling_mode().await;
-        let allow_grace = match scheduling_mode {
+        let _allow_grace = match scheduling_mode {
             crate::proxy::sticky_config::SchedulingMode::Balance => {
                 token_manager.tokens_count() <= 1
             }
@@ -4787,7 +4786,7 @@ pub async fn handle_completions(
         }
 
         let scheduling_mode = token_manager.get_scheduling_mode().await;
-        let allow_grace = match scheduling_mode {
+        let _allow_grace = match scheduling_mode {
             crate::proxy::sticky_config::SchedulingMode::Balance => {
                 token_manager.tokens_count() <= 1
             }

@@ -1,14 +1,14 @@
-
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import ModalDialog from '../common/ModalDialog';
 import { useTranslation } from 'react-i18next';
 import { request as invoke } from '../../utils/request';
-import { Trash2, Search, X, Copy, CheckCircle, ChevronLeft, ChevronRight, RefreshCw, User } from 'lucide-react';
-
+import { Trash2, Search, X, Copy, CheckCircle, ChevronLeft, ChevronRight, ChevronDown, RefreshCw, User, Sparkles, FileCode2, Eye, EyeOff, Clock, Settings, HardDrive, Database, Check } from 'lucide-react';
 
 import { AppConfig, ExperimentalConfig } from '../../types/config';
 import { formatCompactNumber } from '../../utils/format';
 import { useAccountStore } from '../../stores/useAccountStore';
+import { isTauri } from '../../utils/env';
 import { copyToClipboard } from '../../utils/clipboard';
 import { VirtualizedPayloadViewer } from './VirtualizedPayloadViewer';
 
@@ -24,7 +24,11 @@ interface ProxyRequestLog {
     mapped_model?: string;
     error?: string;
     request_body?: string;
+    upstream_request_body?: string;
     response_body?: string;
+    request_headers?: string;
+    upstream_request_headers?: string;
+    response_headers?: string;
     input_tokens?: number;
     output_tokens?: number;
     cached_tokens?: number;
@@ -263,12 +267,33 @@ const LogTable: React.FC<LogTableProps> = ({
                             <td className="text-gray-600 dark:text-gray-300 font-sans truncate text-xs py-2 px-3" style={{ width: `${colWidths.account}px`, maxWidth: `${colWidths.account}px` }} title={log.account_email || ''}>
                                 {log.account_email ? log.account_email.replace(/(.{3}).*(@.*)/, '$1***$2') : '-'}
                             </td>
-
-                            <td className="truncate" style={{ width: '180px', maxWidth: '180px' }}>{log.url}</td>
-                            <td className="text-right text-[9px]" style={{ width: '90px' }}>
-                                {log.input_tokens != null && <div>{t('monitor.input')}: {formatCompactNumber(log.input_tokens)}</div>}
-                                {log.output_tokens != null && <div>{t('monitor.output')}: {formatCompactNumber(log.output_tokens)}</div>}
-
+                            <td className="text-gray-700 dark:text-gray-300 truncate text-xs py-2 px-3" style={{ width: `${colWidths.path}px`, maxWidth: `${colWidths.path}px` }} title={log.url || ''}>{log.url}</td>
+                            <td className="text-right text-xs py-2 px-3 whitespace-nowrap truncate" style={{ width: `${colWidths.usage}px`, maxWidth: `${colWidths.usage}px` }}>
+                                {log.input_tokens != null && (() => {
+                                    const totalIn = (log.cached_tokens && log.cached_tokens > log.input_tokens)
+                                        ? log.input_tokens + log.cached_tokens
+                                        : log.input_tokens;
+                                    const hitRate = (log.cached_tokens && totalIn > 0)
+                                        ? Math.min(100, Math.max(0, (log.cached_tokens / totalIn) * 100))
+                                        : 0;
+                                    const hitRateText = totalIn > 0 && log.cached_tokens
+                                        ? (hitRate >= 100 ? '100%' : (hitRate % 1 === 0 ? `${hitRate.toFixed(0)}%` : `${hitRate.toFixed(1)}%`))
+                                        : '';
+                                    return (
+                                        <div>
+                                            <div className="text-gray-700 dark:text-gray-200">{t('monitor.input')}: <span className="font-semibold">{formatCompactNumber(totalIn)}</span></div>
+                                            {log.cached_tokens ? (
+                                                <div
+                                                    className="text-emerald-600 dark:text-emerald-400 font-semibold text-[11px] leading-tight"
+                                                    title={`${t('token_stats.cached', 'Cache')}: ${log.cached_tokens.toLocaleString()}${hitRateText ? ` (${hitRateText})` : ''}`}
+                                                >
+                                                    ({t('monitor.cached', 'Cache')}: {formatCompactNumber(log.cached_tokens)}{hitRateText ? ` ${hitRateText}` : ''})
+                                                </div>
+                                            ) : null}
+                                        </div>
+                                    );
+                                })()}
+                                {log.output_tokens != null && <div className="text-gray-700 dark:text-gray-200">{t('monitor.output')}: <span className="font-semibold">{formatCompactNumber(log.output_tokens)}</span></div>}
                             </td>
                             <td className="text-right text-gray-700 dark:text-gray-300 text-xs font-medium py-2 px-3 truncate" style={{ width: `${colWidths.duration}px`, maxWidth: `${colWidths.duration}px` }}>{log.duration}ms</td>
                             <td className="text-right text-gray-500 dark:text-gray-400 text-xs py-2 px-3 truncate" style={{ width: `${colWidths.time}px`, maxWidth: `${colWidths.time}px` }}>
@@ -298,6 +323,896 @@ const LogTable: React.FC<LogTableProps> = ({
 };
 
 
+// ==========================================
+// 简要模式智能提取与映射算法
+// ==========================================
+function extractConcisePayload(
+    rawStr: string | undefined,
+    kind: 'request' | 'upstream' | 'response',
+    log?: ProxyRequestLog | null
+): string {
+    if (!rawStr) return '';
+    let obj: any;
+    try {
+        obj = JSON.parse(rawStr);
+    } catch {
+        return rawStr;
+    }
+    if (!obj || typeof obj !== 'object') {
+        return rawStr;
+    }
+
+    // 工具声明 (完整保留 Schema，方便开发者查看工具拼接与入参定义)
+    const simplifyTools = (tools: any): any => {
+        if (!Array.isArray(tools)) return undefined;
+        return tools;
+    };
+
+    // 简化工具调用 (统一规范为: id, type: 'function', function: { name, arguments })
+    const simplifyToolCalls = (toolCalls: any): any => {
+        if (!Array.isArray(toolCalls)) return undefined;
+        return toolCalls.map((tc: any) => {
+            if (!tc || typeof tc !== 'object') return tc;
+            const res: any = {};
+            if (tc.id) res.id = tc.id;
+            res.type = tc.type || 'function';
+            if (tc.function && typeof tc.function === 'object') {
+                res.function = {
+                    name: tc.function.name,
+                    arguments: tc.function.arguments !== undefined ? tc.function.arguments : {}
+                };
+            } else {
+                const name = tc.name || tc.function?.name || 'unknown';
+                const args = tc.arguments !== undefined ? tc.arguments : (tc.args !== undefined ? tc.args : (tc.input !== undefined ? tc.input : {}));
+                res.function = {
+                    name,
+                    arguments: args
+                };
+            }
+            return res;
+        });
+    };
+
+    // 简化消息内容 (Claude / OpenAI parts)
+    const simplifyContent = (content: any): any => {
+        if (typeof content === 'string') return content;
+        if (Array.isArray(content)) {
+            return content.map((item: any) => {
+                if (typeof item === 'string') return item;
+                if (!item || typeof item !== 'object') return item;
+                // Claude tool_use 块
+                if (item.type === 'tool_use') {
+                    return {
+                        type: 'tool_use',
+                        id: item.id,
+                        name: item.name,
+                        input: item.input !== undefined ? item.input : {}
+                    };
+                }
+                // Claude tool_result 块
+                if (item.type === 'tool_result') {
+                    return {
+                        type: 'tool_result',
+                        tool_use_id: item.tool_use_id,
+                        ...(item.content !== undefined ? { content: item.content } : {}),
+                        ...(item.is_error !== undefined ? { is_error: item.is_error } : {})
+                    };
+                }
+                // Claude thinking 块与签名
+                if (item.type === 'thinking') {
+                    return {
+                        type: 'thinking',
+                        thinking: item.thinking,
+                        ...(item.signature !== undefined ? { signature: item.signature } : {}),
+                        ...(item.thought_signature !== undefined ? { thought_signature: item.thought_signature } : {}),
+                        ...(item.thoughtSignature !== undefined ? { thoughtSignature: item.thoughtSignature } : {}),
+                        ...(item.thinking_signature !== undefined ? { thinking_signature: item.thinking_signature } : {})
+                    };
+                }
+                // Claude redacted_thinking 块
+                if (item.type === 'redacted_thinking') {
+                    return {
+                        type: 'redacted_thinking',
+                        data: item.data
+                    };
+                }
+                // 文本块
+                if (item.type === 'text') {
+                    return item;
+                }
+                return item;
+            });
+        }
+        return content;
+    };
+
+    // 简化消息列表
+    const simplifyMessages = (messages: any): any => {
+        if (!Array.isArray(messages)) return undefined;
+        return messages.map((m: any) => {
+            if (!m || typeof m !== 'object') return m;
+            const res: any = { role: m.role };
+            if (m.content !== undefined) {
+                res.content = simplifyContent(m.content);
+            }
+            if (m.reasoning_content !== undefined) {
+                res.reasoning_content = m.reasoning_content;
+            }
+            if (m.thinking !== undefined) {
+                res.thinking = m.thinking;
+            }
+            if (m.signature !== undefined) {
+                res.signature = m.signature;
+            }
+            if (m.thought_signature !== undefined) {
+                res.thought_signature = m.thought_signature;
+            }
+            if (m.thinking_signature !== undefined) {
+                res.thinking_signature = m.thinking_signature;
+            }
+            if (m.tool_calls) {
+                res.tool_calls = simplifyToolCalls(m.tool_calls);
+            }
+            if (m.tool_call_id) {
+                res.tool_call_id = m.tool_call_id;
+            }
+            if (m.name) {
+                res.name = m.name;
+            }
+            return res;
+        });
+    };
+
+    // 简化 Gemini 轮次 (contents)
+    const simplifyGeminiContents = (contents: any): any => {
+        if (!Array.isArray(contents)) return undefined;
+        return contents.map((c: any) => {
+            if (!c || typeof c !== 'object') return c;
+            const res: any = { role: c.role };
+            if (Array.isArray(c.parts)) {
+                res.parts = c.parts.map((p: any) => {
+                    if (!p || typeof p !== 'object') return p;
+
+                    // 1. 优先识别工具调用 (functionCall) 并保留其名称、ID、参数与携带的加密思考签名
+                    if (p.functionCall) {
+                        const fcPart: any = {
+                            functionCall: {
+                                name: p.functionCall.name,
+                                ...(p.functionCall.id ? { id: p.functionCall.id } : {}),
+                                args: p.functionCall.args !== undefined ? p.functionCall.args : {}
+                            }
+                        };
+                        if (p.thought !== undefined) fcPart.thought = p.thought;
+                        if (p.thoughtSignature !== undefined) fcPart.thoughtSignature = p.thoughtSignature;
+                        if (p.thought_signature !== undefined) fcPart.thought_signature = p.thought_signature;
+                        if (p.signature !== undefined) fcPart.signature = p.signature;
+                        return fcPart;
+                    }
+
+                    // 2. 优先识别工具响应 (functionResponse) 并保留其名称、ID、返回值与携带的签名
+                    if (p.functionResponse) {
+                        const frPart: any = {
+                            functionResponse: {
+                                name: p.functionResponse.name,
+                                ...(p.functionResponse.id ? { id: p.functionResponse.id } : {}),
+                                response: p.functionResponse.response !== undefined ? p.functionResponse.response : {}
+                            }
+                        };
+                        if (p.thought !== undefined) frPart.thought = p.thought;
+                        if (p.thoughtSignature !== undefined) frPart.thoughtSignature = p.thoughtSignature;
+                        if (p.thought_signature !== undefined) frPart.thought_signature = p.thought_signature;
+                        if (p.signature !== undefined) frPart.signature = p.signature;
+                        return frPart;
+                    }
+
+                    // 3. 独立思考块 (纯思考过程，不带工具调用)
+                    if (p.thought !== undefined || p.thought_signature !== undefined || p.thoughtSignature !== undefined || p.signature !== undefined) {
+                        const tPart: any = {};
+                        if (p.thought !== undefined) tPart.thought = p.thought;
+                        if (p.thought_signature !== undefined) tPart.thought_signature = p.thought_signature;
+                        if (p.thoughtSignature !== undefined) tPart.thoughtSignature = p.thoughtSignature;
+                        if (p.signature !== undefined) tPart.signature = p.signature;
+                        if (p.text !== undefined) tPart.text = p.text;
+                        return tPart;
+                    }
+
+                    // 4. 普通文本块
+                    if (p.text !== undefined) {
+                        return { text: p.text };
+                    }
+
+                    return p;
+                });
+            }
+            return res;
+        });
+    };
+
+    // 简化系统提示词 (Gemini / Anthropic)
+    const simplifySystemInstruction = (sys: any): any => {
+        if (!sys || typeof sys !== 'object') return sys;
+        if (Array.isArray(sys.parts)) {
+            return {
+                parts: sys.parts.map((p: any) => {
+                    if (typeof p === 'string') return { text: p };
+                    if (p && typeof p === 'object' && p.text !== undefined) return { text: p.text };
+                    return p;
+                })
+            };
+        }
+        return sys;
+    };
+
+    // 提取用量与缓存命中率
+    const simplifyUsage = (usage: any): any => {
+        if (!usage || typeof usage !== 'object') return undefined;
+        const res: any = {};
+        const rawInput = usage.prompt_tokens ?? usage.input_tokens ?? usage.promptTokenCount;
+        const output = usage.completion_tokens ?? usage.output_tokens ?? usage.candidatesTokenCount;
+
+        let cached = usage.cached_tokens ?? usage.cache_read_input_tokens ?? usage.cachedContentTokenCount;
+        if (cached == null && usage.prompt_tokens_details?.cached_tokens != null) {
+            cached = usage.prompt_tokens_details.cached_tokens;
+        }
+        if (cached == null && usage.input_tokens_details?.cached_tokens != null) {
+            cached = usage.input_tokens_details.cached_tokens;
+        }
+
+        // 计算全量上下文输入 Token (Total Context Input)
+        // 1. Anthropic 官方协议: input_tokens 仅代表未缓存增量，总上下文 = input_tokens + cache_read_input_tokens
+        // 2. 兼容历史日志: 若 cached > rawInput，说明 rawInput 存的是未缓存差值，做自愈加和
+        let totalInput = rawInput != null ? Number(rawInput) : undefined;
+        if (cached != null && totalInput != null && cached > totalInput) {
+            totalInput = totalInput + Number(cached);
+        } else if (usage.cache_read_input_tokens != null && usage.prompt_tokens == null && usage.promptTokenCount == null) {
+            totalInput = Number(usage.input_tokens || 0) + Number(cached || 0);
+        }
+
+        const total = usage.total_tokens ?? usage.totalTokenCount ?? (totalInput != null && output != null ? totalInput + Number(output) : undefined);
+
+        if (totalInput != null) res.input_tokens = totalInput;
+        if (output != null) res.output_tokens = Number(output);
+        if (total != null) res.total_tokens = Number(total);
+        if (cached != null) {
+            res.cached_tokens = Number(cached);
+            if (totalInput != null && totalInput > 0) {
+                const rate = Math.min(100, Math.max(0, (Number(cached) / totalInput) * 100));
+                res.cache_hit_rate = `${rate.toFixed(1)}%`;
+            }
+        }
+        if (usage.cache_creation_input_tokens != null) {
+            res.cache_creation_input_tokens = usage.cache_creation_input_tokens;
+        }
+        if (usage.completion_tokens_details?.reasoning_tokens != null) {
+            res.reasoning_tokens = usage.completion_tokens_details.reasoning_tokens;
+        }
+        if (usage.output_tokens_details?.reasoning_tokens != null) {
+            res.reasoning_tokens = usage.output_tokens_details.reasoning_tokens;
+        }
+        return res;
+    };
+
+    const concise: any = {};
+
+    // 保留用于标识思考块/会话的单行标识 (支持 requestId, sessionId, trace_id 等)
+    const candidateSessionId =
+        obj.requestId ||
+        obj.request?.sessionId ||
+        obj._session_id ||
+        obj.session_id ||
+        (log?.id ? log.id : undefined);
+
+    if (candidateSessionId) {
+        concise._session_thinking_id = candidateSessionId;
+    }
+
+    // 模型
+    if (obj.model) concise.model = obj.model;
+
+    // 思考模型配置 (开启、预算、effort、summary)
+    if (obj.thinking !== undefined) concise.thinking = obj.thinking;
+    if (obj.reasoning_effort !== undefined) concise.reasoning_effort = obj.reasoning_effort;
+    if (obj.reasoning !== undefined) concise.reasoning = obj.reasoning;
+    if (obj.summary !== undefined) concise.summary = obj.summary;
+    if (obj.generationConfig?.thinkingConfig !== undefined) {
+        concise.thinkingConfig = obj.generationConfig.thinkingConfig;
+    } else if (obj.thinkingConfig !== undefined) {
+        concise.thinkingConfig = obj.thinkingConfig;
+    }
+
+    // 系统提示词
+    if (obj.system !== undefined) concise.system = obj.system;
+    if (obj.systemInstruction !== undefined) concise.systemInstruction = simplifySystemInstruction(obj.systemInstruction);
+
+    // 对话主体 (OpenAI / Claude)
+    if (obj.messages) {
+        concise.messages = simplifyMessages(obj.messages);
+    }
+
+    // 对话主体 (Gemini)
+    if (obj.contents) {
+        concise.contents = simplifyGeminiContents(obj.contents);
+    }
+
+    // 工具声明
+    if (obj.tools) {
+        concise.tools = simplifyTools(obj.tools);
+    }
+
+    // Antigravity 专用的 request 嵌套包装层 (核心：正确映射原中转报文的嵌套层级)
+    if (obj.request && typeof obj.request === 'object') {
+        const innerReq: any = {};
+
+        // 单行会话标识
+        if (obj.request.sessionId) {
+            innerReq.sessionId = obj.request.sessionId;
+        }
+
+        // 思考配置 (thinkingConfig / generationConfig)
+        if (obj.request.generationConfig?.thinkingConfig !== undefined) {
+            innerReq.thinkingConfig = obj.request.generationConfig.thinkingConfig;
+        } else if (obj.request.thinkingConfig !== undefined) {
+            innerReq.thinkingConfig = obj.request.thinkingConfig;
+        }
+
+        // 系统提示词
+        if (obj.request.systemInstruction !== undefined) {
+            innerReq.systemInstruction = simplifySystemInstruction(obj.request.systemInstruction);
+        }
+
+        // 对话主体与思考块 (Gemini contents 或 Claude messages)
+        if (obj.request.contents) {
+            innerReq.contents = simplifyGeminiContents(obj.request.contents);
+        }
+        if (obj.request.messages) {
+            innerReq.messages = simplifyMessages(obj.request.messages);
+        }
+
+        // 工具声明
+        if (obj.request.tools) {
+            innerReq.tools = simplifyTools(obj.request.tools);
+        }
+
+        concise.request = innerReq;
+    }
+
+    // 响应：思考块与思考签名 (顶层响应或非流式)
+    if (obj.thinking !== undefined) concise.thinking = obj.thinking;
+    if (obj.thinking_signature !== undefined) concise.thinking_signature = obj.thinking_signature;
+    if (obj.thought_signature !== undefined) concise.thought_signature = obj.thought_signature;
+    if (obj.signature !== undefined) concise.signature = obj.signature;
+    if (obj.thoughtSignature !== undefined) concise.thoughtSignature = obj.thoughtSignature;
+    if (obj._timing !== undefined) concise._timing = obj._timing;
+
+    // 🌟 响应报文规范化提取：若为 response，优先将 choices / candidates / content 数组扁平化提升为顶层统一结构
+    if (kind === 'response') {
+        if (obj.choices && Array.isArray(obj.choices) && obj.choices.length > 0) {
+            const first = obj.choices[0];
+            const msg = first?.message || first?.delta;
+            if (msg) {
+                if (concise.thinking === undefined) {
+                    const th = msg.reasoning_content || msg.thinking;
+                    if (th) concise.thinking = th;
+                }
+                if (concise.thinking_signature === undefined) {
+                    const sig = msg.thoughtSignature || msg.thought_signature || msg.signature;
+                    if (sig) concise.thinking_signature = sig;
+                }
+                if (concise.content === undefined && msg.content !== undefined) {
+                    concise.content = typeof msg.content === 'string' ? msg.content : simplifyContent(msg.content);
+                }
+                if (concise.tool_calls === undefined && msg.tool_calls) {
+                    concise.tool_calls = simplifyToolCalls(msg.tool_calls);
+                }
+            }
+        } else if (obj.candidates && Array.isArray(obj.candidates) && obj.candidates.length > 0) {
+            const parts = obj.candidates[0]?.content?.parts;
+            if (Array.isArray(parts)) {
+                let thText = '';
+                let normalText = '';
+                let sigText = '';
+                const extractedTools: any[] = [];
+                for (const p of parts) {
+                    if (p.text) {
+                        if (p.thought) thText += p.text;
+                        else normalText += p.text;
+                    }
+                    const s = p.thoughtSignature || p.thought_signature || p.signature || p.functionCall?.thoughtSignature || p.functionCall?.thought_signature;
+                    if (s && !sigText) sigText = s;
+                    if (p.functionCall) {
+                        extractedTools.push({
+                            id: p.functionCall.id || '',
+                            type: 'function',
+                            function: {
+                                name: p.functionCall.name || 'unknown',
+                                arguments: p.functionCall.args !== undefined ? (typeof p.functionCall.args === 'string' ? p.functionCall.args : JSON.stringify(p.functionCall.args)) : '{}'
+                            }
+                        });
+                    }
+                }
+                if (concise.thinking === undefined && thText) concise.thinking = thText;
+                if (concise.thinking_signature === undefined && sigText) concise.thinking_signature = sigText;
+                if (concise.content === undefined && normalText) concise.content = normalText;
+                if (concise.tool_calls === undefined && extractedTools.length > 0) concise.tool_calls = simplifyToolCalls(extractedTools);
+            }
+        } else if (Array.isArray(obj.content) && !obj.messages && !obj.choices) {
+            let thText = '';
+            let sigText = '';
+            let normalText = '';
+            const extractedTools: any[] = [];
+            for (const item of obj.content) {
+                if (item && typeof item === 'object') {
+                    if (item.type === 'thinking') {
+                        if (item.thinking) thText += item.thinking;
+                        const s = item.signature || item.thought_signature || item.thoughtSignature;
+                        if (s && !sigText) sigText = s;
+                    } else if (item.type === 'text' && item.text) {
+                        normalText += item.text;
+                    } else if (item.type === 'tool_use') {
+                        extractedTools.push({
+                            id: item.id || '',
+                            type: 'function',
+                            function: {
+                                name: item.name || 'unknown',
+                                arguments: item.input !== undefined ? (typeof item.input === 'string' ? item.input : JSON.stringify(item.input)) : '{}'
+                            }
+                        });
+                    }
+                }
+            }
+            if (concise.thinking === undefined && thText) concise.thinking = thText;
+            if (concise.thinking_signature === undefined && sigText) concise.thinking_signature = sigText;
+            if (concise.content === undefined && normalText) concise.content = normalText;
+            if (concise.tool_calls === undefined && extractedTools.length > 0) concise.tool_calls = simplifyToolCalls(extractedTools);
+        }
+    }
+
+    // 响应：Choices / Candidates / 聚合响应 (若为 request 或未扁平化提取的 response，保留 choices/candidates)
+    if (kind !== 'response' || (!concise.content && !concise.tool_calls && !concise.thinking)) {
+        if (obj.choices && Array.isArray(obj.choices)) {
+            concise.choices = obj.choices.map((c: any) => {
+                const choiceRes: any = { index: c.index };
+                if (c.finish_reason) choiceRes.finish_reason = c.finish_reason;
+                if (c.message) {
+                    choiceRes.message = {
+                        role: c.message.role,
+                        ...(c.message.reasoning_content !== undefined ? { reasoning_content: c.message.reasoning_content } : {}),
+                        ...(c.message.thinking !== undefined ? { thinking: c.message.thinking } : {}),
+                        ...(c.message.thinking_signature !== undefined ? { thinking_signature: c.message.thinking_signature } : {}),
+                        ...(c.message.thought_signature !== undefined ? { thought_signature: c.message.thought_signature } : {}),
+                        ...(c.message.signature !== undefined ? { signature: c.message.signature } : {}),
+                        ...(c.message.content !== undefined ? { content: c.message.content } : {}),
+                        ...(c.message.tool_calls ? { tool_calls: simplifyToolCalls(c.message.tool_calls) } : {})
+                    };
+                } else if (c.delta) {
+                    choiceRes.delta = {
+                        role: c.delta.role,
+                        ...(c.delta.reasoning_content !== undefined ? { reasoning_content: c.delta.reasoning_content } : {}),
+                        ...(c.delta.thinking !== undefined ? { thinking: c.delta.thinking } : {}),
+                        ...(c.delta.thinking_signature !== undefined ? { thinking_signature: c.delta.thinking_signature } : {}),
+                        ...(c.delta.thought_signature !== undefined ? { thought_signature: c.delta.thought_signature } : {}),
+                        ...(c.delta.signature !== undefined ? { signature: c.delta.signature } : {}),
+                        ...(c.delta.content !== undefined ? { content: c.delta.content } : {}),
+                        ...(c.delta.tool_calls ? { tool_calls: simplifyToolCalls(c.delta.tool_calls) } : {})
+                    };
+                }
+                return choiceRes;
+            });
+        }
+
+        if (obj.candidates && Array.isArray(obj.candidates)) {
+            concise.candidates = obj.candidates.map((cand: any) => {
+                const candRes: any = {};
+                if (cand.finishReason) candRes.finishReason = cand.finishReason;
+                if (cand.content) {
+                    candRes.content = simplifyGeminiContents([cand.content])?.[0] || cand.content;
+                }
+                return candRes;
+            });
+        }
+    }
+
+    if (obj.input !== undefined) {
+        concise.input = typeof obj.input === 'string' ? obj.input : (Array.isArray(obj.input) ? simplifyMessages(obj.input) : obj.input);
+    }
+    if (obj.output !== undefined) {
+        concise.output = obj.output;
+    }
+    if (obj.prompt !== undefined) {
+        concise.prompt = obj.prompt;
+    }
+    if (obj.instructions !== undefined) {
+        concise.instructions = obj.instructions;
+    }
+
+    if (obj.content !== undefined && !obj.messages && !obj.choices && !obj.request) {
+        concise.content = simplifyContent(obj.content);
+    }
+    if (obj.reasoning_content !== undefined && !obj.messages && !obj.choices) {
+        concise.reasoning_content = obj.reasoning_content;
+    }
+    if (obj.tool_calls && !obj.messages && !obj.choices) {
+        concise.tool_calls = simplifyToolCalls(obj.tool_calls);
+    }
+
+    // 用量与缓存
+    const usage = simplifyUsage(obj.usage || obj.usageMetadata);
+    if (usage) {
+        concise.usage = usage;
+    } else if (kind === 'response' && (log?.input_tokens || log?.output_tokens)) {
+        const totalIn = (log.cached_tokens && log.cached_tokens > (log.input_tokens || 0))
+            ? (log.input_tokens || 0) + log.cached_tokens
+            : (log.input_tokens || 0);
+        concise.usage = {
+            input_tokens: totalIn,
+            output_tokens: log.output_tokens,
+            total_tokens: totalIn + (log.output_tokens || 0),
+            ...(log.cached_tokens != null ? {
+                cached_tokens: log.cached_tokens,
+                cache_hit_rate: totalIn > 0 ? `${Math.min(100, Math.max(0, (log.cached_tokens / totalIn) * 100)).toFixed(1)}%` : undefined
+            } : {})
+        };
+    }
+
+    const substantiveKeys = Object.keys(concise).filter(k => k !== '_session_thinking_id');
+    if (substantiveKeys.length === 0) {
+        return rawStr;
+    }
+
+    return JSON.stringify(concise, null, 2);
+}
+
+interface StageTimingInfo {
+    cleanSec?: number;
+    normSec?: number;
+    thinkingSec?: number;
+    ttftSec?: number;
+    streamSec?: number;
+    totalSec?: number;
+    isOldRecordWithoutStages?: boolean;
+}
+
+const parseTimingFromHeadersAndBody = (
+    headersJson?: string,
+    responseBody?: string,
+    durationMs?: number
+): StageTimingInfo | null => {
+    let cleanSec: number | undefined;
+    let normSec: number | undefined;
+    let thinkingSec: number | undefined;
+    let ttftSec: number | undefined;
+    let streamSec: number | undefined;
+    let totalSec: number | undefined;
+
+    // 1. Check if responseBody has _timing object
+    if (responseBody) {
+        try {
+            const bodyObj = JSON.parse(responseBody);
+            if (bodyObj && typeof bodyObj === 'object' && bodyObj._timing) {
+                const t = bodyObj._timing;
+                if (typeof t.clean_s === 'number') cleanSec = t.clean_s;
+                else if (typeof t.clean_ms === 'number') cleanSec = t.clean_ms / 1000;
+
+                if (typeof t.norm_s === 'number') normSec = t.norm_s;
+                else if (typeof t.norm_ms === 'number') normSec = t.norm_ms / 1000;
+
+                if (typeof t.thinking_s === 'number') thinkingSec = t.thinking_s;
+                else if (typeof t.thinking_ms === 'number') thinkingSec = t.thinking_ms / 1000;
+
+                if (typeof t.ttft_s === 'number') ttftSec = t.ttft_s;
+                else if (typeof t.ttft_ms === 'number') ttftSec = t.ttft_ms / 1000;
+
+                if (typeof t.stream_s === 'number') streamSec = t.stream_s;
+                else if (typeof t.stream_ms === 'number') streamSec = t.stream_ms / 1000;
+
+                if (typeof t.total_s === 'number') totalSec = t.total_s;
+                else if (typeof t.total_ms === 'number') totalSec = t.total_ms / 1000;
+            }
+        } catch {}
+    }
+
+    // 2. Parse from headersJson if any are still missing
+    if (headersJson) {
+        try {
+            const headersObj = JSON.parse(headersJson);
+            if (headersObj && typeof headersObj === 'object') {
+                const getVal = (key: string): number | undefined => {
+                    const matchKey = Object.keys(headersObj).find(
+                        (k) => k.toLowerCase() === key.toLowerCase()
+                    );
+                    if (!matchKey) return undefined;
+                    const v = headersObj[matchKey];
+                    if (typeof v === 'number') return v;
+                    if (typeof v === 'string') {
+                        const parsed = parseFloat(v);
+                        return isNaN(parsed) ? undefined : parsed;
+                    }
+                    if (Array.isArray(v) && v.length > 0) {
+                        const parsed = parseFloat(String(v[0]));
+                        return isNaN(parsed) ? undefined : parsed;
+                    }
+                    return undefined;
+                };
+
+                if (cleanSec === undefined) {
+                    const ms = getVal('x-timing-clean-ms');
+                    if (ms !== undefined) cleanSec = ms / 1000;
+                }
+                if (normSec === undefined) {
+                    const ms = getVal('x-timing-norm-ms');
+                    if (ms !== undefined) normSec = ms / 1000;
+                }
+                if (thinkingSec === undefined) {
+                    const ms = getVal('x-timing-thinking-ms');
+                    if (ms !== undefined) thinkingSec = ms / 1000;
+                }
+                if (ttftSec === undefined) {
+                    const ms = getVal('x-timing-ttft-ms');
+                    if (ms !== undefined) ttftSec = ms / 1000;
+                }
+                if (streamSec === undefined) {
+                    const ms = getVal('x-timing-stream-ms');
+                    if (ms !== undefined) streamSec = ms / 1000;
+                }
+                if (totalSec === undefined) {
+                    const ms = getVal('x-timing-total-ms');
+                    if (ms !== undefined) totalSec = ms / 1000;
+                }
+            }
+        } catch {}
+    }
+
+    // 3. Fallback for totalSec if durationMs exists
+    if (totalSec === undefined && durationMs !== undefined && durationMs > 0) {
+        totalSec = durationMs / 1000;
+    }
+
+    // If we have neither totalSec nor any stages, return null
+    if (totalSec === undefined && cleanSec === undefined && ttftSec === undefined) {
+        return null;
+    }
+
+    const isOldRecordWithoutStages =
+        cleanSec === undefined &&
+        normSec === undefined &&
+        thinkingSec === undefined &&
+        ttftSec === undefined;
+
+    return {
+        cleanSec,
+        normSec,
+        thinkingSec,
+        ttftSec,
+        streamSec,
+        totalSec,
+        isOldRecordWithoutStages,
+    };
+};
+
+const formatSeconds = (sec?: number): string => {
+    if (sec === undefined || sec === null || isNaN(sec)) return '-';
+    if (sec < 0.001) {
+        return `${sec.toFixed(4)}s`;
+    }
+    if (sec < 1) {
+        return `${sec.toFixed(3)}s`;
+    }
+    return `${sec.toFixed(2)}s`;
+};
+
+interface TimingDiagnosticsCardProps {
+    timing: StageTimingInfo;
+    onCopyText: (text: string) => void;
+}
+
+const TimingDiagnosticsCard: React.FC<TimingDiagnosticsCardProps> = ({ timing, onCopyText }) => {
+    const { t } = useTranslation();
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [isCopied, setIsCopied] = useState(false);
+
+    const totalSec = timing.totalSec || 0;
+
+    const stages = useMemo(() => [
+        {
+            key: 'clean',
+            label: t('monitor.timing.clean', '会话清洗 (Clean)'),
+            desc: t('monitor.timing.clean_desc', '清理缓存控制 / 合并同角色 / 历史提纯'),
+            sec: timing.cleanSec,
+            color: 'bg-indigo-500',
+            textColor: 'text-indigo-600 dark:text-indigo-400',
+        },
+        {
+            key: 'norm',
+            label: t('monitor.timing.norm', '中转归一 (Normalize)'),
+            desc: t('monitor.timing.norm_desc', '模型映射 / 账号调度 / 跨协议转换'),
+            sec: timing.normSec,
+            color: 'bg-purple-500',
+            textColor: 'text-purple-600 dark:text-purple-400',
+        },
+        {
+            key: 'thinking',
+            label: t('monitor.timing.thinking', '思维块回填 (ThinkingStore)'),
+            desc: t('monitor.timing.thinking_desc', '持久化思维链及补齐商业Agent历史签名'),
+            sec: timing.thinkingSec,
+            color: 'bg-amber-500',
+            textColor: 'text-amber-600 dark:text-amber-400',
+        },
+        {
+            key: 'ttft',
+            label: t('monitor.timing.ttft', '等待首包 (TTFT)'),
+            desc: t('monitor.timing.ttft_desc', '网关上送至接收首个数据包 (含首Token/思考块)'),
+            sec: timing.ttftSec,
+            color: 'bg-emerald-500',
+            textColor: 'text-emerald-600 dark:text-emerald-400',
+        },
+        {
+            key: 'stream',
+            label: t('monitor.timing.stream', '流式传输 (Stream)'),
+            desc: t('monitor.timing.stream_desc', '首个数据块到达至整条流式响应完成'),
+            sec: timing.streamSec,
+            color: 'bg-sky-500',
+            textColor: 'text-sky-600 dark:text-sky-400',
+        },
+    ], [timing, t]);
+
+    const handleCopy = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        const lines: string[] = [];
+        if (timing.cleanSec !== undefined) lines.push(`会话清洗 (Clean)：${formatSeconds(timing.cleanSec)}`);
+        if (timing.normSec !== undefined) lines.push(`中转归一 (Normalize)：${formatSeconds(timing.normSec)}`);
+        if (timing.thinkingSec !== undefined) lines.push(`思维块回填 (ThinkingStore)：${formatSeconds(timing.thinkingSec)}`);
+        if (timing.ttftSec !== undefined) lines.push(`等待首包 (TTFT)：${formatSeconds(timing.ttftSec)}`);
+        if (timing.streamSec !== undefined) lines.push(`流式传输 (Stream)：${formatSeconds(timing.streamSec)}`);
+        lines.push(`总耗时：${formatSeconds(timing.totalSec)}`);
+
+        onCopyText(lines.join('\n'));
+        setIsCopied(true);
+        setTimeout(() => setIsCopied(false), 2000);
+    };
+
+    if (timing.isOldRecordWithoutStages) {
+        return (
+            <div className="mb-3 rounded-xl overflow-hidden border border-gray-200 dark:border-base-300 bg-gray-100/50 dark:bg-base-200">
+                <div className="px-3 py-2 bg-gray-200/60 dark:bg-base-200 border-b border-gray-200 dark:border-base-300 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                        <Clock size={13} className="text-gray-500 dark:text-gray-400 shrink-0" />
+                        <span className="text-xs font-bold tracking-wider text-gray-700 dark:text-gray-200 shrink-0 whitespace-nowrap">
+                            {t('monitor.timing.title', '耗时诊断')}
+                        </span>
+                        <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60">
+                            {t('monitor.timing.total', '总耗时')}: {formatSeconds(timing.totalSec)}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="mb-3 rounded-xl overflow-hidden border border-emerald-500/30 dark:border-emerald-500/25 bg-emerald-50/25 dark:bg-base-100 shadow-sm">
+            {/* Card Header */}
+            <div
+                className={`px-3 py-2 bg-emerald-500/10 dark:bg-emerald-950/30 flex items-center justify-between gap-2 select-none cursor-pointer hover:bg-emerald-500/15 transition-colors ${
+                    isExpanded ? 'border-b border-emerald-500/20' : ''
+                }`}
+                onClick={() => setIsExpanded((prev) => !prev)}
+            >
+                <div className="flex items-center gap-2 min-w-0">
+                    <Clock size={14} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <span className="text-xs font-bold tracking-wider text-emerald-950 dark:text-emerald-100 shrink-0 whitespace-nowrap">
+                        {t('monitor.timing.title', '耗时诊断')}
+                    </span>
+                    {!isExpanded && totalSec > 0 && (
+                        <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/70 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60">
+                            {t('monitor.timing.total', '总耗时')}: {formatSeconds(timing.totalSec)}
+                        </span>
+                    )}
+                </div>
+
+                <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <button
+                        type="button"
+                        onClick={handleCopy}
+                        className="btn btn-ghost btn-xs h-6 px-2 text-emerald-800 dark:text-emerald-200 hover:bg-emerald-500/15 text-[11px] font-semibold gap-1"
+                        title={isCopied ? t('common.copied', '已复制') : t('common.copy', '复制')}
+                    >
+                        {isCopied ? <CheckCircle size={12} className="text-emerald-500" /> : <Copy size={12} />}
+                        <span>{isCopied ? t('common.copied', '已复制') : t('common.copy', '复制')}</span>
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setIsExpanded((prev) => !prev)}
+                        className="btn btn-ghost btn-xs p-1 h-6 min-h-0 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-500/15"
+                        title={isExpanded ? '收起耗时诊断' : '展开耗时诊断'}
+                    >
+                        <ChevronDown size={14} className={`transition-transform duration-200 ${isExpanded ? '' : '-rotate-90'}`} />
+                    </button>
+                </div>
+            </div>
+
+            {/* Expandable Body */}
+            {isExpanded && (
+                <div className="p-3 space-y-2.5 font-mono text-xs">
+                    {/* Multi-stage Stacked Progress Bar */}
+                    {totalSec > 0 && (
+                        <div className="space-y-1">
+                            <div className="h-2 w-full bg-gray-200/80 dark:bg-base-300 rounded-full flex overflow-hidden shadow-inner">
+                                {stages.map((st) => {
+                                    if (st.sec === undefined || st.sec <= 0) return null;
+                                    const pct = Math.min(100, Math.max(0.5, (st.sec / totalSec) * 100));
+                                    return (
+                                        <div
+                                            key={st.key}
+                                            style={{ width: `${pct}%` }}
+                                            className={`${st.color} h-full transition-all duration-300 relative group`}
+                                            title={`${st.label}: ${formatSeconds(st.sec)} (${((st.sec / totalSec) * 100).toFixed(1)}%)`}
+                                        />
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Stage Metrics Grid */}
+                    <div className="grid grid-cols-1 gap-1.5 pt-0.5">
+                        {stages.map((st) => {
+                            const hasVal = st.sec !== undefined;
+                            const pct = hasVal && totalSec > 0 ? ((st.sec! / totalSec) * 100).toFixed(1) : undefined;
+                            return (
+                                <div
+                                    key={st.key}
+                                    className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-white dark:bg-base-200 border border-gray-200/80 dark:border-base-300/90 hover:border-emerald-500/40 transition-colors shadow-2xs"
+                                >
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                        <span className={`w-2.5 h-2.5 rounded-full ${st.color} shrink-0`} />
+                                        <div className="min-w-0">
+                                            <span className="font-bold text-gray-900 dark:text-white truncate block text-xs">
+                                                {st.label}
+                                            </span>
+                                            <span className="text-[10px] text-gray-500 dark:text-gray-400 truncate block">
+                                                {st.desc}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-baseline gap-2 shrink-0 text-right font-mono">
+                                        <span className={`text-xs font-black ${hasVal ? st.textColor : 'text-gray-400'}`}>
+                                            {formatSeconds(st.sec)}
+                                        </span>
+                                        {pct !== undefined && (
+                                            <span className="text-[11px] font-bold text-gray-500 dark:text-gray-400 w-11 text-right">
+                                                {pct}%
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+
+                        {/* Total Duration Row */}
+                        <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-emerald-500/15 dark:bg-emerald-950/50 border border-emerald-500/40 font-bold">
+                            <div className="flex items-center gap-2 min-w-0">
+                                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0" />
+                                <span className="text-emerald-950 dark:text-emerald-100 text-xs font-bold">
+                                    {t('monitor.timing.total', '总耗时')}
+                                </span>
+                            </div>
+                            <div className="flex items-baseline gap-2 shrink-0 text-right font-mono">
+                                <span className="text-sm font-black text-emerald-800 dark:text-emerald-200">
+                                    {formatSeconds(timing.totalSec)}
+                                </span>
+                                <span className="text-[11px] text-emerald-700/80 dark:text-emerald-300/80 w-11 text-right font-bold">
+                                    100%
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
 
 
 export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
@@ -310,13 +1225,80 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
     const filterRef = useRef(filter);
     const accountFilterRef = useRef(accountFilter);
     const currentPageRef = useRef(1);
+    const globalFilterInputRef = useRef<HTMLInputElement>(null);
     const [selectedLog, setSelectedLog] = useState<ProxyRequestLog | null>(null);
     const [isLoggingEnabled, setIsLoggingEnabled] = useState(false);
     const [captureHealthLogs, setCaptureHealthLogs] = useState(false);
     const [isClearConfirmOpen, setIsClearConfirmOpen] = useState(false);
+    const [payloadViewMode, setPayloadViewMode] = useState<'concise' | 'full'>('concise');
+    const [showMetadata, setShowMetadata] = useState(true);
+    const [copiedCard, setCopiedCard] = useState<string | null>(null);
 
-    const [copiedRequestId, setCopiedRequestId] = useState<string | null>(null);
+    // 日志存储与维护配置状态
+    const [showLogSettings, setShowLogSettings] = useState(false);
+    const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
+    const [isSavingConfig, setIsSavingConfig] = useState(false);
+    const [saveSuccess, setSaveSuccess] = useState(false);
+    const [isClearCacheModalOpen, setIsClearCacheModalOpen] = useState(false);
+    const [cacheClearedSuccess, setCacheClearedSuccess] = useState(false);
+    const [dbDiskSizeBytes, setDbDiskSizeBytes] = useState<number | null>(null);
 
+    const fetchDbDiskSize = useCallback(async () => {
+        try {
+            const bytes = await invoke<number>('get_proxy_db_disk_size');
+            setDbDiskSizeBytes(bytes);
+        } catch (e) {
+            console.error('Failed to get proxy db disk size', e);
+        }
+    }, []);
+
+    useEffect(() => {
+        if (showLogSettings) {
+            fetchDbDiskSize();
+        }
+    }, [showLogSettings, fetchDbDiskSize]);
+
+    const formatBytes = (bytes: number) => {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+        return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+    };
+
+    // 全局快捷键 Ctrl+F：当焦点在报文卡片之外时，聚焦主界面的全局过滤搜索框
+    useEffect(() => {
+        const handleGlobalKeyDown = (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+                const activeEl = document.activeElement;
+                if (activeEl && activeEl.closest('.payload-viewer-card')) {
+                    return;
+                }
+                e.preventDefault();
+                globalFilterInputRef.current?.focus();
+                globalFilterInputRef.current?.select();
+            }
+        };
+        window.addEventListener('keydown', handleGlobalKeyDown);
+        return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+    }, []);
+
+    const conciseRequestBody = useMemo(() => {
+        return selectedLog?.request_body
+            ? extractConcisePayload(selectedLog.request_body, 'request', selectedLog)
+            : '';
+    }, [selectedLog?.request_body, selectedLog?.id]);
+
+    const conciseUpstreamBody = useMemo(() => {
+        return selectedLog?.upstream_request_body
+            ? extractConcisePayload(selectedLog.upstream_request_body, 'upstream', selectedLog)
+            : '';
+    }, [selectedLog?.upstream_request_body, selectedLog?.id]);
+
+    const conciseResponseBody = useMemo(() => {
+        return selectedLog?.response_body
+            ? extractConcisePayload(selectedLog.response_body, 'response', selectedLog)
+            : '';
+    }, [selectedLog?.response_body, selectedLog?.id, selectedLog?.input_tokens, selectedLog?.output_tokens, selectedLog?.cached_tokens]);
 
     const timingInfo = useMemo(() => {
         return parseTimingFromHeadersAndBody(
@@ -484,6 +1466,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
     };
 
     const pendingLogsRef = useRef<ProxyRequestLog[]>([]);
+    const listenerSetupRef = useRef(false);
     const isMountedRef = useRef(true);
 
     useEffect(() => {
@@ -491,20 +1474,102 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
         loadData();
         fetchAccounts();
 
-        const pollInterval = window.setInterval(() => {
-            if (isMountedRef.current && !loading) {
-                loadData(currentPageRef.current, filterRef.current, accountFilterRef.current);
+        let unlistenFn: (() => void) | null = null;
+        let updateTimeout: number | null = null;
+
+        const setupListener = async () => {
+            if (!isTauri()) return;
+            // Prevent duplicate listener registration (React 18 StrictMode)
+            if (listenerSetupRef.current) {
+                console.debug('[ProxyMonitor] Listener already set up, skipping...');
+                return;
             }
-        }, 10000);
+            listenerSetupRef.current = true;
+
+            console.debug('[ProxyMonitor] Setting up event listener for proxy://request');
+            unlistenFn = await listen<ProxyRequestLog>('proxy://request', (event) => {
+                if (!isMountedRef.current) return;
+
+                const newLog = event.payload;
+
+                // 移除 body 以减少内存占用
+                const logSummary = {
+                    ...newLog,
+                    request_body: undefined,
+                    upstream_request_body: undefined,
+                    response_body: undefined
+                };
+
+                // Check if this log already exists (deduplicate at event level)
+                const alreadyExists = pendingLogsRef.current.some(log => log.id === newLog.id);
+                if (alreadyExists) {
+                    console.debug('[ProxyMonitor] Duplicate event ignored:', newLog.id);
+                    return;
+                }
+
+                pendingLogsRef.current.push(logSummary);
+
+                // 防抖:每 500ms 批量更新一次
+                if (updateTimeout) clearTimeout(updateTimeout);
+                updateTimeout = window.setTimeout(async () => {
+                    if (!isMountedRef.current) return;
+
+                    const currentPending = pendingLogsRef.current;
+                    if (currentPending.length > 0) {
+                        setLogs(prev => {
+                            // Deduplicate by id
+                            const existingIds = new Set(prev.map(log => log.id));
+                            const uniqueNewLogs = currentPending.filter(log => !existingIds.has(log.id));
+                            // Merge and sort by timestamp descending (newest first)
+                            const merged = [...uniqueNewLogs, ...prev];
+                            merged.sort((a, b) => b.timestamp - a.timestamp);
+                            return merged.slice(0, 100);
+                        });
+
+                        // Fetch stats and total count from backend instead of local calculation
+                        try {
+                            const [currentStats, count] = await Promise.all([
+                                invoke<ProxyStats>('get_proxy_stats'),
+                                invoke<number>('get_proxy_logs_count_filtered', { filter: '', errorsOnly: false })
+                            ]);
+                            if (isMountedRef.current) {
+                                if (currentStats) setStats(currentStats);
+                                setTotalCount(count);
+                            }
+                        } catch (e) {
+                            console.error('Failed to fetch stats:', e);
+                        }
+
+                        pendingLogsRef.current = [];
+                    }
+                }, 500);
+            });
+        };
+        setupListener();
+
+        // Web 模式補強：如果不是 Tauri 環境，則啟用定時輪詢
+        let pollInterval: number | null = null;
+        if (!isTauri()) {
+            console.debug('[ProxyMonitor] Web mode detected, starting auto-poll (10s)');
+            pollInterval = window.setInterval(() => {
+                if (isMountedRef.current && !loading) {
+                    // [FIX] 使用 ref.current 获取最新的筛选条件
+                    loadData(currentPageRef.current, filterRef.current, accountFilterRef.current);
+                }
+            }, 10000);
+        }
 
         return () => {
             isMountedRef.current = false;
-            clearInterval(pollInterval);
+            listenerSetupRef.current = false;
+            if (unlistenFn) unlistenFn();
+            if (updateTimeout) clearTimeout(updateTimeout);
+            if (pollInterval) clearInterval(pollInterval);
         };
     }, []);
 
     useEffect(() => {
-        setCopiedRequestId(null);
+        setCopiedCard(null);
     }, [selectedLog?.id]);
 
     // Reload when pageSize changes
@@ -541,10 +1606,13 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
 
     const quickFilters = [
         { label: t('monitor.filters.all'), value: '' },
+        { label: 'claude', value: 'claude' },
+        { label: 'flash', value: 'flash' },
+        { label: 'pro', value: 'pro' },
+        { label: 'agent', value: 'agent' },
         { label: t('monitor.filters.error'), value: '__ERROR__' },
         { label: t('monitor.filters.chat'), value: 'completions' },
         { label: t('monitor.filters.gemini'), value: 'gemini' },
-        { label: t('monitor.filters.claude'), value: 'claude' },
         { label: t('monitor.filters.images'), value: 'images' }
     ];
 
@@ -565,25 +1633,49 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
         }
     };
 
-
-    const formatBody = (body?: string) => {
-        if (!body) return <span className="text-gray-400 italic">{t('monitor.details.payload_empty')}</span>;
-        try {
-            const obj = JSON.parse(body);
-            return <pre className="text-[10px] font-mono whitespace-pre-wrap text-gray-700 dark:text-gray-300">{JSON.stringify(obj, null, 2)}</pre>;
-        } catch (e) {
-            return <pre className="text-[10px] font-mono whitespace-pre-wrap text-gray-700 dark:text-gray-300">{body}</pre>;
-        }
+    const updateLogRetentionField = (field: 'max_body_age_hours' | 'max_storage_gb' | 'max_rows', value: number) => {
+        if (!appConfig) return;
+        const currentRetention = appConfig.proxy?.log_retention || { max_body_age_hours: 24, max_storage_gb: 0.5, max_rows: 100000 };
+        const safeVal = field === 'max_storage_gb'
+            ? Math.max(0.1, isNaN(value) ? 0.5 : value)
+            : Math.max(1, isNaN(value) ? 1 : value);
+        const updated = {
+            ...currentRetention,
+            [field]: safeVal,
+        };
+        const currentExp: ExperimentalConfig = appConfig.proxy?.experimental || {
+            enable_usage_scaling: true,
+        };
+        const updatedConfig: AppConfig = {
+            ...appConfig,
+            proxy: {
+                ...appConfig.proxy,
+                log_retention: updated,
+                experimental: {
+                    ...currentExp,
+                }
+            }
+        };
+        setAppConfig(updatedConfig);
     };
 
-    const getCopyPayload = (body: string) => {
-        try {
-            const obj = JSON.parse(body);
-            return JSON.stringify(obj, null, 2);
-        } catch (e) {
-            return body;
-        }
-
+    const updateExperimentalField = (field: 'payload_storage_mode' | 'thinking_retention_days', value: any) => {
+        if (!appConfig) return;
+        const currentExp: ExperimentalConfig = appConfig.proxy?.experimental || {
+            enable_usage_scaling: true,
+        };
+        const updatedExp: ExperimentalConfig = {
+            ...currentExp,
+            [field]: field === 'thinking_retention_days' ? Math.max(1, parseInt(value) || 15) : value,
+        };
+        const updatedConfig: AppConfig = {
+            ...appConfig,
+            proxy: {
+                ...appConfig.proxy,
+                experimental: updatedExp
+            }
+        };
+        setAppConfig(updatedConfig);
     };
 
     const handleSaveLogSettings = async () => {
@@ -630,6 +1722,7 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
                     <div className="relative flex-1">
                         <Search className="absolute left-2.5 top-2 text-gray-400" size={14} />
                         <input
+                            ref={globalFilterInputRef}
                             type="text"
                             placeholder={t('monitor.filters.placeholder')}
                             className="input input-sm input-bordered w-full pl-9 text-xs bg-white dark:bg-base-200 border-gray-300 dark:border-base-300 text-gray-900 dark:text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30"
@@ -930,146 +2023,206 @@ export const ProxyMonitor: React.FC<ProxyMonitorProps> = ({ className }) => {
             </div>
 
             {selectedLog && (
-
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setSelectedLog(null)}>
-                    <div className="bg-white dark:bg-base-100 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden border border-gray-200 dark:border-base-300" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-2 sm:p-3 md:p-4" onClick={() => setSelectedLog(null)}>
+                    <div className="bg-white dark:bg-base-100 rounded-2xl shadow-2xl w-full max-w-[98vw] xl:max-w-[1720px] h-[94vh] max-h-[94vh] flex flex-col overflow-hidden border border-gray-200 dark:border-base-200" onClick={e => e.stopPropagation()}>
                         {/* Modal Header */}
-                        <div className="px-4 py-3 border-b border-gray-100 dark:border-base-300 flex items-center justify-between bg-gray-50 dark:bg-base-200">
-                            <div className="flex items-center gap-3">
-                                {loadingDetail && <div className="loading loading-spinner loading-sm"></div>}
-                                <span className={`badge badge-sm text-white border-none ${selectedLog.status >= 200 && selectedLog.status < 400 ? 'badge-success' : 'badge-error'}`}>{selectedLog.status}</span>
-                                <span className="font-mono font-bold text-gray-900 dark:text-base-content text-sm">{selectedLog.method}</span>
-                                <span className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate max-w-md hidden sm:inline">{selectedLog.url}</span>
+                        <div className="px-4 py-2.5 border-b border-gray-200 dark:border-base-300 flex items-center justify-between bg-gray-50 dark:bg-base-200 shrink-0">
+                            <div className="flex items-center gap-3 min-w-0">
+                                {loadingDetail && <div className="loading loading-spinner loading-sm shrink-0"></div>}
+                                <span className={`badge badge-sm font-bold text-white border-none shrink-0 shadow-xs ${
+                                    selectedLog.status >= 200 && selectedLog.status < 400
+                                        ? 'bg-emerald-600'
+                                        : 'bg-rose-600'
+                                }`}>
+                                    {selectedLog.status}
+                                </span>
+                                <span className="font-mono font-bold text-gray-900 dark:text-white text-sm shrink-0">{selectedLog.method}</span>
+                                <span className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate max-w-lg hidden sm:inline" title={selectedLog.url}>{selectedLog.url}</span>
                             </div>
-                            <button onClick={() => setSelectedLog(null)} className="btn btn-ghost btn-sm btn-circle text-gray-500 dark:text-gray-400 hover:dark:bg-base-300"><X size={18} /></button>
+                            <button onClick={() => setSelectedLog(null)} className="btn btn-ghost btn-sm btn-circle text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-base-200" aria-label="关闭"><X size={18} /></button>
                         </div>
 
                         {/* Modal Content */}
-                        <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-white dark:bg-base-100">
-                            {/* Metadata Section */}
-                            <div className="bg-gray-50 dark:bg-base-200 p-5 rounded-xl border border-gray-200 dark:border-base-300 shadow-inner">
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-y-5 gap-x-10">
-                                    <div className="space-y-1.5">
-                                        <span className="block text-gray-500 dark:text-gray-400 uppercase font-black text-[10px] tracking-widest">{t('monitor.details.time')}</span>
-                                        <span className="font-mono font-semibold text-gray-900 dark:text-base-content text-xs">{new Date(selectedLog.timestamp).toLocaleString()}</span>
-                                    </div>
-                                    <div className="space-y-1.5">
-                                        <span className="block text-gray-500 dark:text-gray-400 uppercase font-black text-[10px] tracking-widest">{t('monitor.details.duration')}</span>
-                                        <span className="font-mono font-semibold text-gray-900 dark:text-base-content text-xs">{selectedLog.duration}ms</span>
-                                    </div>
-                                    <div className="space-y-1.5">
-                                        <span className="block text-gray-500 dark:text-gray-400 uppercase font-black text-[10px] tracking-widest">{t('monitor.details.tokens')}</span>
-                                        <div className="font-mono text-[11px] flex gap-2">
-                                            <span className="text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/40 px-2.5 py-1 rounded-md border border-blue-200 dark:border-blue-800/50 font-bold">In: {formatCompactNumber(selectedLog.input_tokens ?? 0)}</span>
-                                            <span className="text-green-700 dark:text-green-300 bg-green-100 dark:bg-green-900/40 px-2.5 py-1 rounded-md border border-green-200 dark:border-green-800/50 font-bold">Out: {formatCompactNumber(selectedLog.output_tokens ?? 0)}</span>
+                        <div className="flex-1 min-h-0 flex flex-col p-3 sm:p-4 space-y-2.5 bg-gray-100/50 dark:bg-base-100 overflow-hidden">
+                            {/* Metadata Section (Collapsible) */}
+                            {showMetadata && (
+                                <div className="bg-white dark:bg-base-200 p-3 sm:p-3.5 rounded-xl border border-gray-200 dark:border-base-300 shadow-sm shrink-0 text-xs transition-all duration-200">
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                                        <div>
+                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-bold text-[10px] tracking-wider">{t('monitor.details.time')}</span>
+                                            <span className="font-mono font-semibold text-gray-900 dark:text-white text-xs truncate block" title={new Date(selectedLog.timestamp).toLocaleString()}>{new Date(selectedLog.timestamp).toLocaleString()}</span>
+                                        </div>
+                                        <div>
+                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-bold text-[10px] tracking-wider">{t('monitor.details.duration')}</span>
+                                            <span className="font-mono font-semibold text-gray-900 dark:text-white text-xs">{selectedLog.duration}ms</span>
+                                        </div>
+                                        <div>
+                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-bold text-[10px] tracking-wider">{t('monitor.details.tokens')}</span>
+                                            <div className="font-mono text-[11px] flex items-center gap-1.5 mt-0.5">
+                                                {(() => {
+                                                    const totalIn = (selectedLog.cached_tokens && selectedLog.cached_tokens > (selectedLog.input_tokens ?? 0))
+                                                        ? (selectedLog.input_tokens ?? 0) + selectedLog.cached_tokens
+                                                        : (selectedLog.input_tokens ?? 0);
+                                                    return (
+                                                        <span className="text-blue-700 dark:text-blue-300 bg-blue-100 dark:bg-blue-900/40 px-1.5 py-0.5 rounded font-bold" title={`Total Input Tokens: ${totalIn}`}>
+                                                            In: {formatCompactNumber(totalIn)}
+                                                        </span>
+                                                    );
+                                                })()}
+                                                <span className="text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/40 px-1.5 py-0.5 rounded font-bold">Out: {formatCompactNumber(selectedLog.output_tokens ?? 0)}</span>
+                                                {selectedLog.cached_tokens != null && selectedLog.cached_tokens > 0 && (() => {
+                                                    const totalIn = (selectedLog.cached_tokens && selectedLog.cached_tokens > (selectedLog.input_tokens ?? 0))
+                                                        ? (selectedLog.input_tokens ?? 0) + selectedLog.cached_tokens
+                                                        : (selectedLog.input_tokens ?? 0);
+                                                    const hitRate = totalIn > 0 ? Math.min(100, Math.max(0, (selectedLog.cached_tokens / totalIn) * 100)) : 0;
+                                                    const hitRateText = totalIn > 0 ? (hitRate >= 100 ? '100%' : (hitRate % 1 === 0 ? `${hitRate.toFixed(0)}%` : `${hitRate.toFixed(1)}%`)) : '';
+                                                    return (
+                                                        <span
+                                                            className="text-purple-700 dark:text-purple-300 bg-purple-100 dark:bg-purple-900/40 px-1.5 py-0.5 rounded font-bold"
+                                                            title={`Cache: ${selectedLog.cached_tokens.toLocaleString()}${hitRateText ? ` (${hitRateText})` : ''}`}
+                                                        >
+                                                            Cache: {formatCompactNumber(selectedLog.cached_tokens)}{hitRateText ? ` (${hitRateText})` : ''}
+                                                        </span>
+                                                    );
+                                                })()}
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-bold text-[10px] tracking-wider">{t('monitor.details.protocol')}</span>
+                                            <span className={`inline-block px-2 py-0.5 rounded-full font-mono font-bold text-[11px] uppercase mt-0.5 text-white shadow-xs ${
+                                                selectedLog.protocol === 'openai' ? 'bg-emerald-600' :
+                                                selectedLog.protocol === 'anthropic' ? 'bg-amber-600' :
+                                                selectedLog.protocol === 'gemini' ? 'bg-blue-600' :
+                                                'bg-gray-600'
+                                            }`}>
+                                                {selectedLog.protocol || '-'}
+                                            </span>
+                                        </div>
+                                        <div>
+                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-bold text-[10px] tracking-wider">{t('monitor.details.model')}</span>
+                                            <span className="font-mono font-bold text-blue-600 dark:text-blue-400 truncate block text-xs" title={selectedLog.model}>{selectedLog.model || '-'}</span>
+                                            {selectedLog.mapped_model && selectedLog.model !== selectedLog.mapped_model && (
+                                                <span className="font-mono text-emerald-600 dark:text-emerald-400 truncate block text-[11px]" title={selectedLog.mapped_model}>➔ {selectedLog.mapped_model}</span>
+                                            )}
+                                        </div>
+                                        <div>
+                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-bold text-[10px] tracking-wider">{t('monitor.details.account_used')}</span>
+                                            <span className="font-mono font-medium text-gray-900 dark:text-white truncate block text-xs" title={selectedLog.account_email || '-'}>{selectedLog.account_email || '-'}</span>
                                         </div>
                                     </div>
                                 </div>
-                                <div className="mt-5 pt-5 border-t border-gray-200 dark:border-base-300">
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                                        {selectedLog.protocol && (
-                                            <div className="space-y-1.5">
-                                                <span className="block text-gray-500 dark:text-gray-400 uppercase font-black text-[10px] tracking-widest">{t('monitor.details.protocol')}</span>
-                                                <span className={`inline-block px-2.5 py-1 rounded-md font-mono font-black text-xs uppercase ${selectedLog.protocol === 'openai' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/50' :
-                                                    selectedLog.protocol === 'anthropic' ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400 border border-orange-200 dark:border-orange-800/50' :
-                                                        selectedLog.protocol === 'gemini' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400 border border-blue-200 dark:border-blue-800/50' :
-                                                            'bg-gray-100 text-gray-700 dark:bg-gray-900/40 dark:text-gray-400'
-                                                    }`}>
-                                                    {selectedLog.protocol}
-                                                </span>
+                            )}
 
-                                            </div>
-                                        )}
-                                        <div className="space-y-1.5">
-                                            <span className="block text-gray-500 dark:text-gray-400 uppercase font-black text-[10px] tracking-widest">{t('monitor.details.model')}</span>
-                                            <span className="font-mono font-black text-blue-600 dark:text-blue-400 break-all text-sm">{selectedLog.model || '-'}</span>
-                                        </div>
-
-                                        {selectedLog.mapped_model && selectedLog.model !== selectedLog.mapped_model && (
-                                            <div className="space-y-1.5">
-                                                <span className="block text-gray-500 dark:text-gray-400 uppercase font-black text-[10px] tracking-widest">{t('monitor.details.mapped_model')}</span>
-                                                <span className="font-mono font-black text-green-600 dark:text-green-400 break-all text-sm">{selectedLog.mapped_model}</span>
-                                            </div>
-                                        )}
+                            {/* Mode & Toolbar Bar */}
+                            <div className="flex flex-wrap items-center justify-between gap-2 px-1 shrink-0">
+                                <div className="flex items-center gap-2">
+                                    <div className="inline-flex items-center p-1 bg-gray-200/70 dark:bg-base-200 rounded-xl border border-gray-300/70 dark:border-base-300 gap-1 shadow-inner">
+                                        <button
+                                            type="button"
+                                            onClick={() => setPayloadViewMode('concise')}
+                                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 cursor-pointer select-none ${
+                                                payloadViewMode === 'concise'
+                                                    ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-sm border border-gray-200 dark:border-base-300'
+                                                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                                            }`}
+                                        >
+                                            <Sparkles size={13} className={payloadViewMode === 'concise' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'} />
+                                            <span>{t('monitor.details.concise_mode', '简要模式')}</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setPayloadViewMode('full')}
+                                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-150 cursor-pointer select-none ${
+                                                payloadViewMode === 'full'
+                                                    ? 'bg-white dark:bg-base-100 text-blue-600 dark:text-blue-400 shadow-sm border border-gray-200 dark:border-base-300'
+                                                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                                            }`}
+                                        >
+                                            <FileCode2 size={13} className={payloadViewMode === 'full' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400'} />
+                                            <span>{t('monitor.details.full_mode', '完整模式')}</span>
+                                        </button>
                                     </div>
+                                    <span className="hidden sm:inline-block text-[11px] text-gray-500 dark:text-gray-400">
+                                        {payloadViewMode === 'concise'
+                                            ? t('monitor.details.concise_desc', '已为您精简工具参数与冗余字段，突出思考块、用量与对话主体')
+                                            : '显示原始完整未修剪报文'}
+                                    </span>
                                 </div>
-                                {selectedLog.account_email && (
-                                    <div className="mt-5 pt-5 border-t border-gray-200 dark:border-base-300">
-                                        <span className="block text-gray-500 dark:text-gray-400 uppercase font-black text-[10px] tracking-widest mb-2">{t('monitor.details.account_used')}</span>
-                                        <span className="font-mono font-semibold text-gray-900 dark:text-base-content text-xs">{selectedLog.account_email}</span>
-                                    </div>
-                                )}
+
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowMetadata((prev) => !prev)}
+                                        className="btn btn-xs btn-ghost text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-base-200 gap-1 text-[11px]"
+                                        title={showMetadata ? '折叠元数据以增大报文视野' : '展开元数据信息'}
+                                    >
+                                        {showMetadata ? <EyeOff size={13} /> : <Eye size={13} />}
+                                        <span>{showMetadata ? '收起元数据' : '展开元数据'}</span>
+                                    </button>
+                                </div>
                             </div>
 
-                            {/* Payloads */}
-                            <div className="space-y-4">
-                                <div>
-                                    <div className="flex items-center justify-between mb-2">
-                                        <h3 className="text-xs font-bold uppercase text-gray-400 flex items-center gap-2">{t('monitor.details.request_payload')}</h3>
-                                        <button
-                                            type="button"
-                                            className="btn btn-ghost btn-xs gap-1"
-                                            onClick={async () => {
-                                                if (!selectedLog.request_body) return;
-                                                const success = await copyToClipboard(getCopyPayload(selectedLog.request_body));
-                                                if (success) {
-                                                    setCopiedRequestId(selectedLog.id);
-                                                    setTimeout(() => {
-                                                        setCopiedRequestId((current) => (current === selectedLog.id ? null : current));
-                                                    }, 2000);
-                                                }
-                                            }}
-                                            disabled={!selectedLog.request_body}
-                                            title={copiedRequestId === selectedLog.id ? t('proxy.config.btn_copied') : t('proxy.config.btn_copy')}
-                                            aria-label={t('proxy.config.btn_copy')}
-                                        >
-                                            {copiedRequestId === selectedLog.id ? (
-                                                <CheckCircle size={12} className="text-green-500" />
-                                            ) : (
-                                                <Copy size={12} />
-                                            )}
-                                            <span className="text-[10px]">
-                                                {copiedRequestId === selectedLog.id ? t('proxy.config.btn_copied') : t('proxy.config.btn_copy')}
-                                            </span>
-                                        </button>
-                                    </div>
-                                    <div className="bg-gray-50 dark:bg-base-300 rounded-lg p-3 border border-gray-100 dark:border-base-300 overflow-hidden">{formatBody(selectedLog.request_body)}</div>
-                                </div>
-                                <div>
-                                    <div className="flex items-center justify-between mb-2">
-                                        <h3 className="text-xs font-bold uppercase text-gray-400 flex items-center gap-2">{t('monitor.details.response_payload')}</h3>
-                                        <button
-                                            type="button"
-                                            className="btn btn-ghost btn-xs gap-1"
-                                            onClick={async () => {
-                                                if (!selectedLog.response_body) return;
-                                                const success = await copyToClipboard(getCopyPayload(selectedLog.response_body));
-                                                if (success) {
-                                                    setCopiedRequestId(selectedLog.id ? `${selectedLog.id}-response` : null);
-                                                    setTimeout(() => {
-                                                        setCopiedRequestId((current) =>
-                                                            current === `${selectedLog.id}-response` ? null : current
-                                                        );
-                                                    }, 2000);
-                                                }
-                                            }}
-                                            disabled={!selectedLog.response_body}
-                                            title={copiedRequestId === `${selectedLog.id}-response` ? t('proxy.config.btn_copied') : t('proxy.config.btn_copy')}
-                                            aria-label={t('proxy.config.btn_copy')}
-                                        >
-                                            {copiedRequestId === `${selectedLog.id}-response` ? (
-                                                <CheckCircle size={12} className="text-green-500" />
-                                            ) : (
-                                                <Copy size={12} />
-                                            )}
-                                            <span className="text-[10px]">
-                                                {copiedRequestId === `${selectedLog.id}-response` ? t('proxy.config.btn_copied') : t('proxy.config.btn_copy')}
-                                            </span>
-                                        </button>
-                                    </div>
-                                    <div className="bg-gray-50 dark:bg-base-300 rounded-lg p-3 border border-gray-100 dark:border-base-300 overflow-hidden">{formatBody(selectedLog.response_body)}</div>
-                                </div>
-
+                            {/* Horizontal 3-Column Grid */}
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 flex-1 min-h-0 overflow-hidden">
+                                <VirtualizedPayloadViewer
+                                    cardId="req"
+                                    title={t('monitor.details.request_payload', '请求报文 (Request)')}
+                                    badge="REQUEST"
+                                    badgeStyle="bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200 dark:border-blue-800/60"
+                                    rawPayload={selectedLog.request_body}
+                                    concisePayload={conciseRequestBody}
+                                    headersJson={selectedLog.request_headers}
+                                    viewMode={payloadViewMode}
+                                    emptyPlaceholder={t('monitor.details.payload_empty', '无请求报文')}
+                                    onCopy={async (text) => {
+                                        const success = await copyToClipboard(text);
+                                        if (success) {
+                                            setCopiedCard('req');
+                                            setTimeout(() => setCopiedCard(null), 2000);
+                                        }
+                                    }}
+                                    isCopied={copiedCard === 'req'}
+                                />
+                                <VirtualizedPayloadViewer
+                                    cardId="upstream"
+                                    title={t('monitor.details.upstream_request_payload', '中转报文 (Forwarded)')}
+                                    badge="FORWARDED"
+                                    badgeStyle="bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-800/60"
+                                    rawPayload={selectedLog.upstream_request_body}
+                                    concisePayload={conciseUpstreamBody}
+                                    headersJson={selectedLog.upstream_request_headers}
+                                    viewMode={payloadViewMode}
+                                    emptyPlaceholder={t('monitor.details.no_upstream_payload', '无中转报文 (直接转发或未记录)')}
+                                    onCopy={async (text) => {
+                                        const success = await copyToClipboard(text);
+                                        if (success) {
+                                            setCopiedCard('upstream');
+                                            setTimeout(() => setCopiedCard(null), 2000);
+                                        }
+                                    }}
+                                    isCopied={copiedCard === 'upstream'}
+                                />
+                                <VirtualizedPayloadViewer
+                                    cardId="resp"
+                                    title={t('monitor.details.response_payload', '响应报文 (Response)')}
+                                    badge="RESPONSE"
+                                    badgeStyle="bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60"
+                                    rawPayload={selectedLog.response_body}
+                                    concisePayload={conciseResponseBody}
+                                    headersJson={selectedLog.response_headers}
+                                    viewMode={payloadViewMode}
+                                    emptyPlaceholder={t('monitor.details.payload_empty', '无响应报文')}
+                                    duration={selectedLog.duration}
+                                    timingNode={timingNode}
+                                    onCopy={async (text) => {
+                                        const success = await copyToClipboard(text);
+                                        if (success) {
+                                            setCopiedCard('resp');
+                                            setTimeout(() => setCopiedCard(null), 2000);
+                                        }
+                                    }}
+                                    isCopied={copiedCard === 'resp'}
+                                />
                             </div>
                         </div>
                     </div>

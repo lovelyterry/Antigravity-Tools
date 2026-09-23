@@ -160,7 +160,6 @@ fn apply_thinking_hints(
     }
 }
 
-const MAX_RETRY_ATTEMPTS: usize = 3;
 
 // ===== Model Constants for Background Tasks =====
 // These can be adjusted for performance/cost optimization or overridden by custom_mapping
@@ -238,7 +237,7 @@ The structure MUST be as follows:
 // ===== 统一退避策略模块 =====
 // 移除本地重复定义，使用 common 中的统一实现
 use super::common::{
-    apply_retry_strategy, determine_retry_strategy, should_rotate_account, RetryStrategy,
+    apply_retry_strategy, should_rotate_account, RetryStrategy,
 };
 
 // ===== 退避策略模块结束 =====
@@ -2013,7 +2012,7 @@ pub async fn handle_messages(
             }
         }
 
-        let error_type = match last_status.as_u16() {
+        let _error_type = match last_status.as_u16() {
             400 => "invalid_request_error",
             401 => "authentication_error",
             403 => "permission_error",
@@ -2060,7 +2059,7 @@ pub async fn handle_messages(
             }
         }
 
-        let error_type = match last_status.as_u16() {
+        let _error_type = match last_status.as_u16() {
             400 => "invalid_request_error",
             401 => "authentication_error",
             403 => "permission_error",

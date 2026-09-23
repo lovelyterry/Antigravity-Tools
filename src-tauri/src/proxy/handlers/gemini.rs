@@ -21,7 +21,6 @@ use crate::proxy::session_manager::SessionManager;
 use crate::proxy::upstream::client::mask_email;
 use axum::http::HeaderMap;
 
-const MAX_RETRY_ATTEMPTS: usize = 3;
 
 fn response_has_inline_image_data(value: &Value) -> bool {
     let response = value.get("response").unwrap_or(value);
@@ -893,7 +892,7 @@ pub async fn handle_generate(
         }
 
         let scheduling_mode = token_manager.get_scheduling_mode().await;
-        let allow_grace = match scheduling_mode {
+        let _allow_grace = match scheduling_mode {
             crate::proxy::sticky_config::SchedulingMode::Balance => {
                 token_manager.tokens_count() <= 1
             }

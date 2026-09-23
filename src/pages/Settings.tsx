@@ -1,3 +1,4 @@
+import { isTauri } from '../utils/env';
 import { useState, useEffect, startTransition } from 'react';
 import { Save, Github, User, MessageCircle, ExternalLink, RefreshCw, Heart, Coffee, LayoutDashboard, Users, Network, Activity, BarChart3, Settings as SettingsIcon, Lock, CheckCircle2, Globe, Send } from 'lucide-react';
 import { request as invoke } from '../utils/request';
@@ -70,7 +71,8 @@ function Settings() {
             enabled: false,
             backoff_steps: [30, 60, 120, 300, 600]
         },
-        hidden_menu_items: [],  // 菜单显示设置：默认不隐藏任何菜单项
+        hidden_menu_items: [],
+        cloudflared: { enabled: false, mode: "quick", port: 3000, use_http2: true },  // 菜单显示设置：默认不隐藏任何菜单项
 
     });
 
@@ -80,6 +82,8 @@ function Settings() {
 
     // Antigravity cache clearing state
     const [isClearCacheOpen, setIsClearCacheOpen] = useState(false);
+    const [isClearLogsOpen, setIsClearLogsOpen] = useState(false);
+    const confirmClearLogs = () => { setIsClearLogsOpen(false); };
     const [cachePaths, setCachePaths] = useState<string[]>([]);
     const [isClearingCache, setIsClearingCache] = useState(false);
 
@@ -212,7 +216,7 @@ function Settings() {
         }
         if (isTauri()) {
             try {
-                await emit('app://trigger-update');
+                // await emit('app://trigger-update');
             } catch (err) {
                 console.error('Failed to trigger update event:', err);
                 if (updateInfo?.downloadUrl) {

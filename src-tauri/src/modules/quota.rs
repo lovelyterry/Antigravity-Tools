@@ -105,7 +105,7 @@ struct LoadProjectResponse {
     #[serde(rename = "allowedTiers")]
     allowed_tiers: Option<Vec<Tier>>,
     #[serde(rename = "ineligibleTiers")]
-    ineligible_tiers: Option<Vec<IneligibleTier>>,
+    pub _ineligible_tiers: Option<Vec<IneligibleTier>>,
 }
 
 #[derive(Debug, Deserialize)]

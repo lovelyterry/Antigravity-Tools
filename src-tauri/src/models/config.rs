@@ -36,6 +36,32 @@ pub struct AppConfig {
 
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CloudflaredConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_cf_mode")]
+    pub mode: String,
+    #[serde(default = "default_cf_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default = "default_true")]
+    pub use_http2: bool,
+}
+
+fn default_cf_mode() -> String {
+    "quick".to_string()
+}
+
+fn default_cf_port() -> u16 {
+    3000
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// Scheduled warmup configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScheduledWarmupConfig {

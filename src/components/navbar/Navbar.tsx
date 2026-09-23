@@ -1,3 +1,5 @@
+import { startTransition } from 'react';
+import i18n from '../../i18n';
 import { LayoutDashboard, Users, Network, Activity, BarChart3, Settings, Lock } from 'lucide-react';
 
 import { useTranslation } from 'react-i18next';

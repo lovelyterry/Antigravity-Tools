@@ -1503,7 +1503,7 @@ fn build_contents(
                             }
                         }
 
-                        let mut part = json!({
+                        let part = json!({
                             "functionResponse": {
                                 "name": func_name,
                                 "response": {"result": merged_content},

@@ -21,6 +21,7 @@ static RE_TEXT_DELAY_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     ]
 });
 
+#[cfg(test)]
 static RE_LEGACY_DELAY_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
         Regex::new(r"(?i)quota will reset after ([^.,;\]\n]+)").unwrap(),
@@ -149,6 +150,7 @@ pub fn parse_retry_delay_with_source(
 }
 
 /// Preserve the pre-state-machine delay parsing used by the Claude handler.
+#[cfg(test)]
 pub(crate) fn parse_legacy_retry_delay(error_text: &str) -> Option<u64> {
     for re in RE_LEGACY_DELAY_PATTERNS.iter() {
         if let Some(cap) = re.captures(error_text) {

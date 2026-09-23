@@ -27,7 +27,6 @@ const APIKEY_FUN_PROVIDER_ID: &str = "apikey-fun";
 const MAX_PROVIDER_ID_LEN: usize = 128;
 const OPENAI_COMPATIBLE_NPM: &str = "@ai-sdk/openai-compatible";
 
-
 static OPENCODE_CONFIG_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn acquire_opencode_config_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -1319,9 +1318,32 @@ fn merge_hyphenated_version_tokens(model_id: &str) -> String {
 }
 
 /// IDs to try against the catalog: original, vendor-stripped, dotted/dashed version variants.
+fn catalog_lookup_ids(model_id: &str) -> Vec<String> {
+    let bare = strip_model_vendor_prefix(model_id.trim());
+    let mut ids = Vec::new();
+    let mut push = |id: String| {
+        if !id.is_empty() && !ids.iter().any(|existing| existing == &id) {
+            ids.push(id);
+        }
+    };
+    push(model_id.trim().to_string());
+    push(bare.to_string());
+    push(bare.replace('.', "-"));
+    push(merge_hyphenated_version_tokens(bare));
+    ids
+}
 
-
-
+fn lookup_catalog_model<'a>(
+    catalog: &HashMap<&str, &'a ModelDef>,
+    model_id: &str,
+) -> Option<&'a ModelDef> {
+    for candidate in catalog_lookup_ids(model_id) {
+        if let Some(model) = catalog.get(candidate.as_str()) {
+            return Some(*model);
+        }
+    }
+    None
+}
 
 /// Derive a readable name from a model id, preserving version dots
 /// (e.g. "gemini-3.5-flash-low" -> "Gemini 3.5 Flash Low",
@@ -1665,7 +1687,6 @@ fn sync_openai_provider_to_path(
 
 /// Precondition: the caller must already hold `OPENCODE_CONFIG_MUTEX`
 /// (see `acquire_opencode_config_lock`). This function does not lock itself.
-
 fn sync_accounts_file(accounts_path: &PathBuf) -> Result<(), String> {
     create_backup(accounts_path)?;
 
@@ -1911,6 +1932,116 @@ fn apply_sync_to_config(
             merge_provider_options(ag_provider, &normalized_url, api_key);
             migrate_gemini_alias_models(ag_provider);
             merge_catalog_models(ag_provider, models_to_sync);
+        }
+    }
+
+    config
+}
+
+/// Replace the provider's model list with the given inputs. The list mirrors the
+/// models actually exposed by the upstream key, so models absent from the input are
+/// dropped (unlike the Antigravity sync which merges). Known catalog ids still get
+/// full catalog metadata, and user-defined fields on surviving models are preserved.
+fn replace_provider_models(provider: &mut Value, model_inputs: Option<&[ModelInput]>) {
+    if provider.get("models").is_none() {
+        provider["models"] = serde_json::json!({});
+    }
+
+    // An absent or empty list means "keep whatever is there" — e.g. the user synced
+    // before querying models, or called the HTTP API with no models field.
+    let Some(inputs) = model_inputs else {
+        return;
+    };
+    if inputs.is_empty() {
+        return;
+    }
+
+    let catalog = build_model_catalog();
+    let catalog_map: HashMap<&str, &ModelDef> = catalog.iter().map(|m| (m.id, m)).collect();
+    let existing_models: serde_json::Map<String, Value> = provider
+        .get("models")
+        .and_then(|m| m.as_object())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut models = serde_json::Map::new();
+    for input in inputs {
+        let model_id = input.id.trim();
+        if model_id.is_empty() {
+            continue;
+        }
+        let entry = match lookup_catalog_model(&catalog_map, model_id) {
+            Some(model_def) => {
+                let catalog_model = build_model_json(model_def);
+                match existing_models.get(model_id) {
+                    Some(existing) if existing.is_object() => {
+                        let mut merged = existing.as_object().unwrap().clone();
+                        if let Some(catalog_obj) = catalog_model.as_object() {
+                            for (key, value) in catalog_obj {
+                                merged.insert(key.clone(), value.clone());
+                            }
+                        }
+                        Value::Object(merged)
+                    }
+                    _ => catalog_model,
+                }
+            }
+            None => {
+                // Unknown upstream models often have manually configured limits,
+                // tool support, or options that cannot be recovered from the catalog.
+                let mut entry = existing_models
+                    .get(model_id)
+                    .and_then(Value::as_object)
+                    .cloned()
+                    .unwrap_or_default();
+                if let Value::Object(defaults) =
+                    build_fallback_model_json(model_id, input.name.as_deref())
+                {
+                    for (key, value) in defaults {
+                        entry.entry(key).or_insert(value);
+                    }
+                }
+                Value::Object(entry)
+            }
+        };
+        models.insert(model_id.to_string(), entry);
+    }
+    provider["models"] = Value::Object(models);
+}
+
+fn apply_openai_compatible_provider_sync(
+    mut config: Value,
+    provider_id: &str,
+    provider_name: &str,
+    proxy_url: &str,
+    api_key: &str,
+    models_to_sync: Option<&[ModelInput]>,
+) -> Value {
+    if !config.is_object() {
+        config = serde_json::json!({});
+    }
+
+    if config.get("$schema").is_none() {
+        config["$schema"] = Value::String("https://opencode.ai/config.json".to_string());
+    }
+
+    let normalized_url = normalize_opencode_base_url(proxy_url);
+    let display_name = if provider_name.trim().is_empty() {
+        "APIKEY.FUN"
+    } else {
+        provider_name.trim()
+    };
+
+    ensure_object(&mut config, "provider");
+
+    if let Some(provider) = config.get_mut("provider").and_then(|p| p.as_object_mut()) {
+        ensure_provider_object(provider, provider_id);
+        if let Some(target) = provider.get_mut(provider_id) {
+            ensure_provider_string_field(target, "npm", OPENAI_COMPATIBLE_NPM);
+            ensure_provider_string_field(target, "name", display_name);
+            ensure_object(target, "options");
+            merge_provider_options(target, &normalized_url, api_key);
+            replace_provider_models(target, models_to_sync);
         }
     }
 
@@ -2613,7 +2744,7 @@ mod tests {
     }
 
     #[test]
-fn test_openai_compatible_sync_creates_apikey_fun_provider() {
+    fn test_openai_compatible_sync_creates_apikey_fun_provider() {
         let config = serde_json::json!({
             "provider": {
                 ANTIGRAVITY_PROVIDER_ID: {
@@ -3111,7 +3242,6 @@ fn test_openai_compatible_sync_creates_apikey_fun_provider() {
     }
 
     #[test]
-
     fn test_humanize_joins_hyphenated_version() {
         assert_eq!(humanize_model_id("claude-sonnet-4-6"), "Claude Sonnet 4.6");
         assert_eq!(
@@ -3127,6 +3257,41 @@ fn test_openai_compatible_sync_creates_apikey_fun_provider() {
             "Claude Opus 4.6"
         );
         assert_eq!(humanize_model_id("grok-4.20-0309"), "Grok 4.20 0309");
+    }
+
+    #[test]
+    fn test_openai_compatible_sync_matches_dotted_and_prefixed_ids() {
+        let result = apply_openai_compatible_provider_sync(
+            serde_json::json!({}),
+            APIKEY_FUN_PROVIDER_ID,
+            "APIKEY.FUN",
+            "https://api.apikey.fun/v1",
+            "fun-key",
+            Some(&[
+                minput("claude-sonnet-4.6"),
+                minput("anthropic/claude-opus-4-6"),
+            ]),
+        );
+        let models = result["provider"][APIKEY_FUN_PROVIDER_ID]["models"]
+            .as_object()
+            .unwrap();
+        assert_eq!(
+            models
+                .get("claude-sonnet-4.6")
+                .unwrap()
+                .get("name")
+                .unwrap(),
+            "Claude Sonnet 4.6"
+        );
+        assert_eq!(
+            models
+                .get("anthropic/claude-opus-4-6")
+                .unwrap()
+                .get("name")
+                .unwrap(),
+            "Claude Opus 4.6"
+        );
+        assert_eq!(models["claude-sonnet-4.6"]["limit"]["context"], 200_000);
     }
 
     // Tests for apply_clear_to_config
@@ -3781,6 +3946,32 @@ pub async fn execute_opencode_sync(
     .unwrap_or_else(|_| Err("Failed to execute sync".to_string()))
 }
 
+pub async fn execute_opencode_openai_sync(
+    proxy_url: String,
+    api_key: String,
+    provider_id: Option<String>,
+    provider_name: Option<String>,
+    models: Option<Vec<ModelInput>>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        sync_opencode_openai_provider(
+            provider_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+                .unwrap_or(APIKEY_FUN_PROVIDER_ID),
+            provider_name
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or("APIKEY.FUN"),
+            &proxy_url,
+            &api_key,
+            models,
+        )
+    })
+    .await
+    .unwrap_or_else(|_| Err("Failed to execute sync".to_string()))
+}
+
 pub async fn execute_opencode_restore() -> Result<(), String> {
     tokio::task::spawn_blocking(move || restore_opencode_config())
         .await
@@ -4062,21 +4253,17 @@ pub fn remove_opencode_provider(provider_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
 pub async fn get_opencode_providers() -> Result<Vec<OpencodeProviderSummary>, String> {
     tokio::task::spawn_blocking(read_opencode_providers)
         .await
         .unwrap_or_else(|_| Err("Failed to read OpenCode providers".to_string()))
 }
 
-#[tauri::command]
 pub async fn execute_opencode_remove_provider(provider_id: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || remove_opencode_provider(&provider_id))
         .await
         .unwrap_or_else(|_| Err("Failed to execute remove provider".to_string()))
 }
-
-#[tauri::command]
 
 pub async fn execute_opencode_clear(
     proxy_url: Option<String>,

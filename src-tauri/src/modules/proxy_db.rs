@@ -180,6 +180,7 @@ fn open_thinking_db_at(db_path: &PathBuf) -> Result<Connection, String> {
     Ok(conn)
 }
 
+#[cfg(test)]
 fn open_thinking_db() -> Result<Connection, String> {
     let db_path = get_thinking_db_path()?;
     open_thinking_db_at(&db_path)
@@ -563,7 +564,7 @@ pub fn save_thinking_record(
     if session_key.is_empty() {
         return Ok(());
     }
-    let mut conn = thinking_db()?;
+    let conn = thinking_db()?;
     let now = chrono::Utc::now().timestamp_millis();
     let tool_ids_json = serde_json::to_string(tool_ids).unwrap_or_else(|_| "[]".to_string());
     let primary_tool_id = tool_ids.first().map(|s| s.as_str());
@@ -678,7 +679,7 @@ pub fn load_thinking_records(session_key: &str) -> Result<Vec<PersistedThinkingR
     if session_key.is_empty() {
         return Ok(Vec::new());
     }
-    let mut conn = thinking_db()?;
+    let conn = thinking_db()?;
     let mut stmt = conn
         .prepare_cached(
             "SELECT fingerprint, thought, signature, tool_ids, tool_names, visible
@@ -733,7 +734,7 @@ pub fn load_thinking_by_tool_id(
     if session_key.is_empty() || tool_id.is_empty() {
         return Ok(None);
     }
-    let mut conn = thinking_db()?;
+    let conn = thinking_db()?;
 
     // 1. Fast Path: 优先通过 primary_tool_id 走专属索引极速点查 (0ms 纳秒级命中)
     let mut stmt = conn
@@ -813,7 +814,7 @@ pub fn load_thinking_by_signature(
     if session_key.is_empty() || signature.is_empty() {
         return Ok(None);
     }
-    let mut conn = thinking_db()?;
+    let conn = thinking_db()?;
     let mut stmt = conn
         .prepare_cached(
             "SELECT fingerprint, thought, signature, tool_ids, tool_names, visible
@@ -857,7 +858,7 @@ pub fn load_thinking_by_fingerprint(
     if session_key.is_empty() || fingerprint.is_empty() {
         return Ok(None);
     }
-    let mut conn = thinking_db()?;
+    let conn = thinking_db()?;
     let mut stmt = conn
         .prepare_cached(
             "SELECT fingerprint, thought, signature, tool_ids, tool_names, visible

@@ -682,7 +682,7 @@ pub fn transform_openai_request_with_session(
                     }
                     */
 
-                    let (func_name, mut args_str) = if let Some(func) = &tc.function {
+                    let (func_name, args_str) = if let Some(func) = &tc.function {
                         (func.name.clone(), func.arguments.clone())
                     } else if let Some(op) = &tc.operation {
                         ("apply_patch".to_string(), serde_json::to_string(op).unwrap_or_else(|_| "{}".to_string()))

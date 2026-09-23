@@ -837,16 +837,11 @@ impl AxumServer {
                 "/proxy/monitor/health-logs/toggle",
                 post(admin_set_proxy_capture_health_logs),
             )
-            .route(
-                "/proxy/cloudflared/status",
-                get(admin_cloudflared_get_status),
-            )
-            .route(
-                "/proxy/cloudflared/install",
-                post(admin_cloudflared_install),
-            )
-            .route("/proxy/cloudflared/start", post(admin_cloudflared_start))
-            .route("/proxy/cloudflared/stop", post(admin_cloudflared_stop))
+            // Cloudflared routes (disabled in standalone web-server)
+            // .route("/proxy/cloudflared/status", get(admin_cloudflared_get_status))
+            // .route("/proxy/cloudflared/install", post(admin_cloudflared_install))
+            // .route("/proxy/cloudflared/start", post(admin_cloudflared_start))
+            // .route("/proxy/cloudflared/stop", post(admin_cloudflared_stop))
 
             .route("/system/open-folder", post(admin_open_folder))
             .route("/proxy/stats", get(admin_get_proxy_stats))
@@ -1027,9 +1022,6 @@ impl AxumServer {
 
         // 绑定地址（使用 socket2 开启 SO_REUSEADDR，通配地址自动开启 IPv6/IPv4 双栈支持）
         let listener = bind_tcp_listener(&host, port)?;
-<<<<<<< HEAD
-        tracing::info!("反代服务器启动在 http://localhost:{} (监听地址: http://{}:{})", port, host, port);
-=======
         let display_host = if host == "0.0.0.0" || host == "::" || host == "[::]" {
             "0.0.0.0 / [::] (IPv4/IPv6 Dual-Stack)".to_string()
         } else if host.contains(':') && !host.starts_with('[') {
@@ -1038,7 +1030,6 @@ impl AxumServer {
             host.to_string()
         };
         tracing::info!("反代服务器启动在 http://{}:{}", display_host, port);
->>>>>>> main
 
         // 创建统一取消令牌
         let cancel_token = tokio_util::sync::CancellationToken::new();
