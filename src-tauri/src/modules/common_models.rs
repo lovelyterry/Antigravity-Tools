@@ -70,7 +70,10 @@ pub fn detect_group(id: &str) -> String {
 
 /// 自动生成精炼短标签 (如 "G3.1 Pro", "Claude 3.5 Sonnet")
 pub fn generate_short_label(id: &str, display_name: &str) -> String {
-    if !display_name.is_empty() && !display_name.eq_ignore_ascii_case("Dynamic Extracted Model") {
+    if !display_name.is_empty()
+        && !display_name.eq_ignore_ascii_case("Dynamic Extracted Model")
+        && !display_name.eq_ignore_ascii_case(id)
+    {
         let dn = display_name.trim();
         // 针对 Gemini 做简洁精炼处理
         if let Some(rest) = dn.strip_prefix("Gemini ") {
@@ -125,27 +128,24 @@ pub fn generate_short_label(id: &str, display_name: &str) -> String {
     id.to_string()
 }
 
-/// 注册单个从 Google 获取到的模型信息
-pub fn register_single_model(
+fn register_model_internal(
+    cache: &mut HashMap<String, DiscoveredModel>,
     id: &str,
     display_name: Option<&str>,
     supports_thinking: Option<bool>,
     supports_images: Option<bool>,
     recommended: Option<bool>,
-) {
+    now: i64,
+) -> bool {
     let id_trimmed = id.trim();
     if id_trimmed.is_empty() {
-        return;
+        return false;
     }
 
-    // 过滤掉非对话或非核心模型 (如内部 embedding、recaptcha)
     let lower = id_trimmed.to_lowercase();
     if !lower.starts_with("gemini") && !lower.starts_with("claude") && !lower.starts_with("gpt") && !lower.starts_with("image") {
-        return;
+        return false;
     }
-
-    let now = chrono::Utc::now().timestamp();
-    let mut cache = DISCOVERED_MODELS.write().unwrap();
 
     let display = display_name
         .map(|s| s.trim())
@@ -156,20 +156,32 @@ pub fn register_single_model(
     let group = detect_group(id_trimmed);
 
     if let Some(existing) = cache.get_mut(id_trimmed) {
-        if !display_name.unwrap_or("").is_empty() {
+        let mut changed = false;
+        if !display_name.unwrap_or("").is_empty() && existing.display_name != display {
             existing.display_name = display.to_string();
             existing.short_label = short_label;
+            changed = true;
         }
         if let Some(st) = supports_thinking {
-            existing.supports_thinking = st;
+            if existing.supports_thinking != st {
+                existing.supports_thinking = st;
+                changed = true;
+            }
         }
         if let Some(si) = supports_images {
-            existing.supports_images = si;
+            if existing.supports_images != si {
+                existing.supports_images = si;
+                changed = true;
+            }
         }
         if let Some(rec) = recommended {
-            existing.recommended = rec;
+            if existing.recommended != rec {
+                existing.recommended = rec;
+                changed = true;
+            }
         }
         existing.last_seen = now;
+        changed
     } else {
         cache.insert(
             id_trimmed.to_string(),
@@ -184,9 +196,52 @@ pub fn register_single_model(
                 last_seen: now,
             },
         );
+        true
+    }
+}
+
+/// 注册单个从 Google 获取到的模型信息
+pub fn register_single_model(
+    id: &str,
+    display_name: Option<&str>,
+    supports_thinking: Option<bool>,
+    supports_images: Option<bool>,
+    recommended: Option<bool>,
+) {
+    let now = chrono::Utc::now().timestamp();
+    let mut cache = DISCOVERED_MODELS.write().unwrap();
+    if register_model_internal(&mut cache, id, display_name, supports_thinking, supports_images, recommended, now) {
+        save_models_to_disk(&cache);
+    }
+}
+
+/// 批量注册模型信息（一次性刷盘，避免 I/O 风暴）
+pub fn register_models_batch<I, S>(models: I)
+where
+    I: IntoIterator<Item = (S, Option<S>, Option<bool>, Option<bool>, Option<bool>)>,
+    S: AsRef<str>,
+{
+    let now = chrono::Utc::now().timestamp();
+    let mut cache = DISCOVERED_MODELS.write().unwrap();
+    let mut any_changed = false;
+
+    for (id, dn, st, si, rec) in models {
+        if register_model_internal(
+            &mut cache,
+            id.as_ref(),
+            dn.as_ref().map(|s| s.as_ref()),
+            st,
+            si,
+            rec,
+            now,
+        ) {
+            any_changed = true;
+        }
     }
 
-    save_models_to_disk(&cache);
+    if any_changed {
+        save_models_to_disk(&cache);
+    }
 }
 
 /// 获取全局发现的公用模型列表（按组和名称排序）
@@ -203,22 +258,34 @@ pub fn list_discovered_models() -> Vec<DiscoveredModel> {
     list
 }
 
-/// 从已存在的 accounts/*.json 中初始化（冷启动恢复）
+/// 从已存在的 accounts/*.json 中初始化（冷启动恢复，批量保存）
 pub fn init_from_existing_accounts() {
     let Ok(accounts) = account::list_accounts() else {
         return;
     };
+    let now = chrono::Utc::now().timestamp();
+    let mut cache = DISCOVERED_MODELS.write().unwrap();
+    let mut any_changed = false;
+
     for acc in accounts {
         if let Some(quota) = acc.quota {
             for m in quota.models {
-                register_single_model(
+                if register_model_internal(
+                    &mut cache,
                     &m.name,
                     m.display_name.as_deref(),
                     m.supports_thinking,
                     m.supports_images,
                     m.recommended,
-                );
+                    now,
+                ) {
+                    any_changed = true;
+                }
             }
         }
+    }
+
+    if any_changed {
+        save_models_to_disk(&cache);
     }
 }

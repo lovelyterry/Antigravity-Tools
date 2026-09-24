@@ -117,8 +117,9 @@ impl QuotaWindowType {
         }
     }
 
-    fn from_reset_diff(seconds_until_reset: i64) -> Self {
-        if seconds_until_reset <= 6 * 3600 {
+    fn from_model_name(name: &str) -> Self {
+        let lower = name.to_lowercase();
+        if lower.contains("5h") || lower.contains("hour") || lower.contains("claude") || lower.contains("gpt") {
             Self::FiveHour
         } else {
             Self::Weekly
@@ -270,7 +271,7 @@ pub fn start_scheduler(
                                 continue;
                             }
                             if let Some(reset_ts) = parse_reset_time_ts(&model.reset_time) {
-                                let win_type = QuotaWindowType::from_reset_diff(reset_ts - now_ts);
+                                let win_type = QuotaWindowType::from_model_name(&model.name);
                                 if win_type == QuotaWindowType::FiveHour && !app_config.scheduled_warmup.warmup_5h {
                                     continue;
                                 }

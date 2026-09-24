@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Sparkles, Check } from 'lucide-react';
 import { ScheduledWarmupConfig } from '../../types/config';
-import { useDynamicModels } from '../../config/modelConfig';
+import { useDynamicModels, getModelProtectionKey } from '../../config/modelConfig';
 
 interface SmartWarmupProps {
     config: ScheduledWarmupConfig;
@@ -92,7 +92,7 @@ const SmartWarmup: React.FC<SmartWarmupProps> = ({ config, onChange }) => {
                             </label>
                             <div className="grid grid-cols-4 gap-2">
                                 {warmupModelsOptions.map((model) => {
-                                    const isSelected = config.monitored_models?.includes(model.id);
+                                    const isSelected = config.monitored_models?.some(m => m === model.id || m === getModelProtectionKey(model.id));
                                     return (
                                         <div
                                             key={model.id}

@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { Shield, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { QuotaProtectionConfig } from '../../types/config';
-import { useDynamicModels } from '../../config/modelConfig';
+import { useDynamicModels, getModelProtectionKey } from '../../config/modelConfig';
 
 interface QuotaProtectionProps {
     config: QuotaProtectionConfig;
@@ -126,7 +126,7 @@ const QuotaProtection = ({ config, onChange }: QuotaProtectionProps) => {
                         </div>
                         <div className="grid grid-cols-4 gap-2">
                             {monitoredModelsOptions.map((model) => {
-                                const isSelected = config.monitored_models?.includes(model.id);
+                                const isSelected = config.monitored_models?.some(m => m === model.id || m === getModelProtectionKey(model.id));
                                 return (
                                     <div
                                         key={model.id}

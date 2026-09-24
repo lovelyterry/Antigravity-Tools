@@ -108,10 +108,8 @@ export const useProxyModels = () => {
                     else if (canonicalName.toLowerCase().includes('claude') || canonicalName.toLowerCase().includes('sonnet') || canonicalName.toLowerCase().includes('opus')) group = 'Claude';
                 }
 
-                const cfgEntry = Object.entries(MODEL_CONFIG).find(
-                    ([cfgId, cfg]) => cfgId.toLowerCase() === canonicalId.toLowerCase() || cfg.protectedKey?.toLowerCase() === canonicalId.toLowerCase()
-                );
-                const CfgIcon = cfgEntry?.[1].Icon;
+                const modelCfg = MODEL_CONFIG[canonicalId];
+                const CfgIcon = modelCfg?.Icon;
                 const icon = CfgIcon ? <CfgIcon size={16} /> : (group === 'Claude' ? <Sparkles size={16} className="text-purple-400" /> : <Bot size={16} className="text-blue-400" />);
 
                 if (!uniqueModelsMap.has(canonicalId)) {
