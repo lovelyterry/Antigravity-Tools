@@ -120,6 +120,9 @@ pub fn run() {
         error!("Failed to initialize user token database: {}", e);
     }
 
+    // Initialize discovered common models from existing accounts
+    modules::common_models::init_from_existing_accounts();
+
     info!("Starting Antigravity-Tools Headless Web Server...");
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");

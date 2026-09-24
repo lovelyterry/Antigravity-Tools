@@ -101,6 +101,7 @@ const COMMAND_MAPPING: Record<string, { url: string; method: 'GET' | 'POST' | 'D
   'save_http_api_settings': { url: '/api/system/http-api/settings', method: 'POST' },
   'get_antigravity_path': { url: '/api/system/antigravity/path', method: 'GET' },
   'get_antigravity_args': { url: '/api/system/antigravity/args', method: 'GET' },
+  'get_available_models': { url: '/api/models/available', method: 'GET' },
 
   // Updates
   'should_check_updates': { url: '/api/system/updates/check-status', method: 'GET' },

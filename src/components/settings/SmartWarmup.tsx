@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Sparkles, Check } from 'lucide-react';
 import { ScheduledWarmupConfig } from '../../types/config';
-import { MODEL_CONFIG } from '../../config/modelConfig';
+import { useDynamicModels } from '../../config/modelConfig';
 
 interface SmartWarmupProps {
     config: ScheduledWarmupConfig;
@@ -11,20 +11,23 @@ interface SmartWarmupProps {
 
 const SmartWarmup: React.FC<SmartWarmupProps> = ({ config, onChange }) => {
     const { t } = useTranslation();
+    const dynamicModels = useDynamicModels();
 
-    const uniqueLabels = new Set<string>();
-    const warmupModelsOptions = Object.entries(MODEL_CONFIG)
-        .filter(([id, config]) => {
-            if (id.includes('thinking')) return false;
-            const label = config.shortLabel || config.label;
-            if (uniqueLabels.has(label)) return false;
-            uniqueLabels.add(label);
-            return true;
-        })
-        .map(([id, config]) => ({
-            id,
-            label: config.shortLabel || config.label
-        }));
+    const warmupModelsOptions = useMemo(() => {
+        const uniqueLabels = new Set<string>();
+        return dynamicModels
+            .filter((m) => {
+                if (m.id.includes('thinking')) return false;
+                const label = m.shortLabel || m.label;
+                if (uniqueLabels.has(label)) return false;
+                uniqueLabels.add(label);
+                return true;
+            })
+            .map((m) => ({
+                id: m.id,
+                label: m.shortLabel || m.label,
+            }));
+    }, [dynamicModels]);
 
     const handleEnabledChange = (enabled: boolean) => {
         let newConfig = { ...config, enabled };

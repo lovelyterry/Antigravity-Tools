@@ -1,7 +1,8 @@
+import { useMemo } from 'react';
 import { Shield, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { QuotaProtectionConfig } from '../../types/config';
-import { MODEL_CONFIG } from '../../config/modelConfig';
+import { useDynamicModels } from '../../config/modelConfig';
 
 interface QuotaProtectionProps {
     config: QuotaProtectionConfig;
@@ -10,6 +11,7 @@ interface QuotaProtectionProps {
 
 const QuotaProtection = ({ config, onChange }: QuotaProtectionProps) => {
     const { t } = useTranslation();
+    const dynamicModels = useDynamicModels();
 
     const handleEnabledChange = (enabled: boolean) => {
         let newConfig = { ...config, enabled };
@@ -41,19 +43,21 @@ const QuotaProtection = ({ config, onChange }: QuotaProtectionProps) => {
         onChange({ ...config, monitored_models: newModels });
     };
 
-    const uniqueLabels = new Set<string>();
-    const monitoredModelsOptions = Object.entries(MODEL_CONFIG)
-        .filter(([id, config]) => {
-            if (id.includes('thinking')) return false;
-            const label = config.shortLabel || config.label;
-            if (uniqueLabels.has(label)) return false;
-            uniqueLabels.add(label);
-            return true;
-        })
-        .map(([id, config]) => ({
-            id,
-            label: config.shortLabel || config.label
-        }));
+    const monitoredModelsOptions = useMemo(() => {
+        const uniqueLabels = new Set<string>();
+        return dynamicModels
+            .filter((m) => {
+                if (m.id.includes('thinking')) return false;
+                const label = m.shortLabel || m.label;
+                if (uniqueLabels.has(label)) return false;
+                uniqueLabels.add(label);
+                return true;
+            })
+            .map((m) => ({
+                id: m.id,
+                label: m.shortLabel || m.label,
+            }));
+    }, [dynamicModels]);
 
     // 计算示例值
     const exampleTotal = 150;

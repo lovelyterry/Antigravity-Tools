@@ -384,6 +384,17 @@ pub async fn fetch_quota_with_cache(
                 // Use debug level for detailed info to avoid console noise
                 tracing::debug!("Quota API returned {} models", quota_response.models.len());
 
+                // Register dynamically discovered models into the global common model registry
+                for (name, info) in &quota_response.models {
+                    crate::modules::common_models::register_single_model(
+                        name,
+                        info.display_name.as_deref(),
+                        info.supports_thinking,
+                        info.supports_images,
+                        info.recommended,
+                    );
+                }
+
                 for (name, info) in quota_response.models {
                     if let Some(quota_info) = info.quota_info {
                         let percentage = quota_info

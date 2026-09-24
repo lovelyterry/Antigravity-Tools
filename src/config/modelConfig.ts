@@ -1,20 +1,27 @@
-import { Gemini, Claude, OpenAI } from '@lobehub/icons';
+import {
+    getModelIconComponent,
+    getModelGroup,
+    getModelShortLabel,
+    useDynamicModels,
+    type DynamicModelOption,
+} from '../hooks/useDynamicModels';
+import { getModelProtectionKey } from '../utils/modelCategory';
 
 /**
  * 模型配置接口
  */
 export interface ModelConfig {
-    /** 模型完整显示名称 (作为回退或默认展示) */
+    /** 模型完整显示名称 */
     label: string;
-    /** 模型简短标签 (用于列表/卡片) */
+    /** 模型简短标签 */
     shortLabel: string;
     /** 保护模型的键名 */
     protectedKey: string;
     /** 模型图标组件 */
-    Icon: React.ComponentType<any>;
-    /** 国际化键名 (用于动态名称) */
+    Icon: any;
+    /** 国际化键名 (可选) */
     i18nKey: string;
-    /** 描述信息键名 (用于详细说明) */
+    /** 描述信息键名 (可选) */
     i18nDescKey: string;
     /** 所属系列/分组 */
     group: string;
@@ -23,267 +30,63 @@ export interface ModelConfig {
 }
 
 /**
- * 模型配置映射
- * 键为模型 ID，值为模型配置
+ * 动态根据模型 ID 实时构建 ModelConfig（不再硬编码模型列表）
  */
-export const MODEL_CONFIG: Record<string, ModelConfig> = {
-    // Gemini 3.x 系列
-    // [Migrate] Gemini 3 Pro High/Low -> Gemini 3.1 Pro High/Low
-    'gemini-3.1-pro-high': {
-        label: 'Gemini 3.1 Pro High',
-        shortLabel: 'G3.1 Pro',
-        protectedKey: 'gemini-pro',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.pro_high',
-        i18nDescKey: 'proxy.model.pro_high',
-        group: 'Gemini 3',
-        tags: ['pro', 'high'],
-    },
-    // Backward-compatible alias
-    'gemini-3-pro-high': {
-        label: 'Gemini 3.1 Pro High',
-        shortLabel: 'G3.1 Pro',
-        protectedKey: 'gemini-pro',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.pro_high',
-        i18nDescKey: 'proxy.model.pro_high',
-        group: 'Gemini 3',
-        tags: ['pro', 'high'],
-    },
-    'gemini-3-flash': {
-        label: 'Gemini 3 Flash',
-        shortLabel: 'G3 Flash',
-        protectedKey: 'gemini-flash',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.flash_preview',
-        i18nDescKey: 'proxy.model.flash_preview',
-        group: 'Gemini 3',
-        tags: ['flash'],
-    },
-    'gemini-3.1-flash-image': {
-        label: 'Gemini 3.1 Flash Image',
-        shortLabel: 'G3.1 Image',
-        protectedKey: 'gemini-3.1-flash-image',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.pro_image',
-        i18nDescKey: 'proxy.model.pro_image_1_1',
-        group: 'Gemini 3',
-        tags: ['image', 'flash'],
-    },
-    'gemini-3-pro-image': {
-        label: 'Gemini 3 Image',
-        shortLabel: 'G3 Image',
-        protectedKey: 'gemini-3-pro-image',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.pro_image',
-        i18nDescKey: 'proxy.model.pro_image_1_1',
-        group: 'Gemini 3',
-        tags: ['image'],
-    },
-    'gemini-3.5-flash': {
-        label: 'Gemini 3.5 Flash',
-        shortLabel: 'G3.5 Flash',
-        protectedKey: 'gemini-flash',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.flash_preview',
-        i18nDescKey: 'proxy.model.flash_preview',
-        group: 'Gemini 3',
-        tags: ['flash'],
-    },
-    'gemini-3.7-flash': {
-        label: 'Gemini 3.7 Flash',
-        shortLabel: 'G3.7 Flash',
-        protectedKey: 'gemini-flash',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.flash_preview',
-        i18nDescKey: 'proxy.model.flash_preview',
-        group: 'Gemini 3',
-        tags: ['flash'],
-    },
-    'gemini-3.1-flash-lite': {
-        label: 'Gemini 3.1 Flash Lite',
-        shortLabel: 'G3.1 Lite',
-        protectedKey: 'gemini-flash',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.flash_lite',
-        i18nDescKey: 'proxy.model.flash_lite',
-        group: 'Gemini 3',
-        tags: ['flash', 'lite'],
-    },
-    'gemini-3.1-pro': {
-        label: 'Gemini 3.1 Pro',
-        shortLabel: 'G3.1 Pro',
-        protectedKey: 'gemini-pro',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.pro_high',
-        i18nDescKey: 'proxy.model.pro_high',
-        group: 'Gemini 3',
-        tags: ['pro'],
-    },
-    'gemini-3-flash-agent': {
-        label: 'Gemini 3.5 Flash (High)',
-        shortLabel: 'G3.5 Flash',
-        protectedKey: 'gemini-flash',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.flash_preview',
-        i18nDescKey: 'proxy.model.flash_preview',
-        group: 'Gemini 3',
-        tags: ['flash', 'high'],
-    },
-    'gemini-pro-agent': {
-        label: 'Gemini 3.1 Pro (High)',
-        shortLabel: 'G3.1 Pro',
-        protectedKey: 'gemini-pro',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.pro_high',
-        i18nDescKey: 'proxy.model.pro_high',
-        group: 'Gemini 3',
-        tags: ['pro', 'high'],
-    },
-    'gemini-3.1-pro-low': {
-        label: 'Gemini 3.1 Pro Low',
-        shortLabel: 'G3.1 Low',
-        protectedKey: 'gemini-pro',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.pro_low',
-        i18nDescKey: 'proxy.model.pro_low',
-        group: 'Gemini 3',
-        tags: ['pro', 'low'],
-    },
-    // Backward-compatible alias
-    'gemini-3-pro-low': {
-        label: 'Gemini 3.1 Pro Low',
-        shortLabel: 'G3.1 Low',
-        protectedKey: 'gemini-pro',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.pro_low',
-        i18nDescKey: 'proxy.model.pro_low',
-        group: 'Gemini 3',
-        tags: ['pro', 'low'],
-    },
-
-    // Gemini 2.5 系列
-    'gemini-2.5-flash': {
-        label: 'Gemini 2.5 Flash',
-        shortLabel: 'G2.5 Flash',
-        protectedKey: 'gemini-flash',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.gemini_2_5_flash',
-        i18nDescKey: 'proxy.model.gemini_2_5_flash',
-        group: 'Gemini 2.5',
-        tags: ['flash'],
-    },
-    'gemini-2.5-flash-lite': {
-        label: 'Gemini 2.5 Flash Lite',
-        shortLabel: 'G2.5 Lite',
-        protectedKey: 'gemini-flash',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.flash_lite',
-        i18nDescKey: 'proxy.model.flash_lite',
-        group: 'Gemini 2.5',
-        tags: ['flash', 'lite'],
-    },
-    'gemini-2.5-flash-thinking': {
-        label: 'Gemini 2.5 Flash Think',
-        shortLabel: 'G2.5 Think',
-        protectedKey: 'gemini-flash',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.flash_thinking',
-        i18nDescKey: 'proxy.model.flash_thinking',
-        group: 'Gemini 2.5',
-        tags: ['flash', 'thinking'],
-    },
-    'gemini-2.5-pro': {
-        label: 'Gemini 2.5 Pro',
-        shortLabel: 'G2.5 Pro',
-        protectedKey: 'gemini-pro',
-        Icon: Gemini.Color,
-        i18nKey: 'proxy.model.gemini_2_5_pro',
-        i18nDescKey: 'proxy.model.gemini_2_5_pro',
-        group: 'Gemini 2.5',
-        tags: ['pro'],
-    },
-
-    // Claude 系列
-    'claude-sonnet-4-6': {
-        label: 'Claude 4.6',
-        shortLabel: 'Claude 4.6',
-        protectedKey: 'claude',
-        Icon: Claude.Color,
-        i18nKey: 'proxy.model.claude_sonnet',
-        i18nDescKey: 'proxy.model.claude_sonnet',
-        group: 'Claude',
-        tags: ['sonnet'],
-    },
-    'claude-sonnet-4-6-thinking': {
-        label: 'Claude 4.6 TK',
-        shortLabel: 'Claude 4.6 TK',
-        protectedKey: 'claude',
-        Icon: Claude.Color,
-        i18nKey: 'proxy.model.claude_sonnet_thinking',
-        i18nDescKey: 'proxy.model.claude_sonnet_thinking',
-        group: 'Claude',
-        tags: ['sonnet', 'thinking'],
-    },
-    'claude-opus-4-6': {
-        label: 'Claude Opus 4.6',
-        shortLabel: 'Claude Opus 4.6',
-        protectedKey: 'claude',
-        Icon: Claude.Color,
-        i18nKey: 'proxy.model.claude_opus',
-        i18nDescKey: 'proxy.model.claude_opus',
-        group: 'Claude',
-        tags: ['opus'],
-    },
-    'claude-opus-4-6-thinking': {
-        label: 'Claude Opus 4.6 TK',
-        shortLabel: 'Claude Opus 4.6 TK',
-        protectedKey: 'claude',
-        Icon: Claude.Color,
-        i18nKey: 'proxy.model.claude_opus_thinking',
-        i18nDescKey: 'proxy.model.claude_opus_thinking',
-        group: 'Claude',
-        tags: ['opus', 'thinking'],
-    },
-
-    // OpenAI / Outros modelos
-    'gpt-oss-120b-medium': {
-        label: 'GPT-OSS 120B (Medium)',
-        shortLabel: 'GPT-OSS',
-        protectedKey: 'gpt-oss',
-        Icon: OpenAI.Avatar,
-        i18nKey: 'proxy.model.gpt_oss',
-        i18nDescKey: 'proxy.model.gpt_oss',
-        group: 'Other',
-        tags: ['openai'],
-    },
-};
+export function createDynamicModelConfig(modelId: string): ModelConfig {
+    const shortLabel = getModelShortLabel(modelId);
+    return {
+        label: modelId,
+        shortLabel,
+        protectedKey: getModelProtectionKey(modelId) || modelId,
+        Icon: getModelIconComponent(modelId),
+        i18nKey: '',
+        i18nDescKey: '',
+        group: getModelGroup(modelId),
+        tags: [],
+    };
+}
 
 /**
- * 获取所有模型 ID 列表
+ * 动态模型配置映射（基于 Proxy 动态响应任意模型 ID，彻底删除写死的清单）
+ */
+export const MODEL_CONFIG: Record<string, ModelConfig> = new Proxy(
+    {} as Record<string, ModelConfig>,
+    {
+        get(target, prop: string) {
+            if (typeof prop !== 'string') return undefined;
+            if (prop in target) return target[prop];
+            const cfg = createDynamicModelConfig(prop);
+            target[prop] = cfg;
+            return cfg;
+        },
+        has() {
+            return true;
+        },
+    }
+);
+
+/**
+ * 获取所有已探测并缓存的模型 ID 列表
  */
 export const getAllModelIds = (): string[] => Object.keys(MODEL_CONFIG);
 
 /**
- * 根据模型 ID 获取配置
+ * 根据模型 ID 动态获取配置
  */
-export const getModelConfig = (modelId: string): ModelConfig | undefined => {
+export const getModelConfig = (modelId: string): ModelConfig => {
     return MODEL_CONFIG[modelId.toLowerCase()];
 };
 
 /**
  * 模型排序权重配置
- * 数字越小，优先级越高
  */
 const MODEL_SORT_WEIGHTS = {
-    // 系列权重 (第一优先级)
     series: {
         'gemini-3': 100,
         'gemini-2.5': 200,
         'gemini-2': 300,
         'claude': 400,
     },
-    // 性能级别权重 (第二优先级)
     tier: {
         'pro': 10,
         'flash': 20,
@@ -291,13 +94,12 @@ const MODEL_SORT_WEIGHTS = {
         'opus': 5,
         'sonnet': 10,
     },
-    // 特殊后缀权重 (第三优先级)
     suffix: {
         'thinking': 1,
         'image': 2,
         'high': 0,
         'low': 3,
-    }
+    },
 };
 
 /**
@@ -307,7 +109,6 @@ function getModelSortWeight(modelId: string): number {
     const id = modelId.toLowerCase();
     let weight = 0;
 
-    // 1. 系列权重 (x1000)
     if (id.startsWith('gemini-3')) {
         weight += MODEL_SORT_WEIGHTS.series['gemini-3'] * 1000;
     } else if (id.startsWith('gemini-2.5')) {
@@ -318,7 +119,6 @@ function getModelSortWeight(modelId: string): number {
         weight += MODEL_SORT_WEIGHTS.series['claude'] * 1000;
     }
 
-    // 2. 性能级别权重 (x100)
     if (id.includes('pro')) {
         weight += MODEL_SORT_WEIGHTS.tier['pro'] * 100;
     } else if (id.includes('flash')) {
@@ -331,7 +131,6 @@ function getModelSortWeight(modelId: string): number {
         weight += MODEL_SORT_WEIGHTS.tier['sonnet'] * 100;
     }
 
-    // 3. 特殊后缀权重 (x10)
     if (id.includes('thinking')) {
         weight += MODEL_SORT_WEIGHTS.suffix['thinking'] * 10;
     } else if (id.includes('image')) {
@@ -347,26 +146,22 @@ function getModelSortWeight(modelId: string): number {
 
 /**
  * 对模型列表进行排序
- * @param models 模型列表
- * @returns 排序后的模型列表
  */
 export function sortModels<T extends { id: string }>(models: T[]): T[] {
     return [...models].sort((a, b) => {
         const weightA = getModelSortWeight(a.id);
         const weightB = getModelSortWeight(b.id);
-
-        // 按权重升序排序
         if (weightA !== weightB) {
             return weightA - weightB;
         }
-
-        // 权重相同时，按字母顺序排序
         return a.id.localeCompare(b.id);
     });
 }
 
-// ── 模型分类与保护键（实现在 src/utils/modelCategory.ts，此处只 re-export）───
+// 导出动态模型相关接口
+export { useDynamicModels, type DynamicModelOption };
 
+// Re-export 分类与显示工具函数
 export {
     categorizeModel,
     getModelProtectionKey,

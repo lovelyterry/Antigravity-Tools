@@ -870,6 +870,7 @@ impl AxumServer {
             )
             .route("/accounts/warmup", post(admin_warm_up_all_accounts))
             .route("/accounts/:accountId/warmup", post(admin_warm_up_account))
+            .route("/models/available", get(admin_get_available_models))
             .route(
                 "/system/data-dir",
                 get(admin_get_data_dir_path).post(admin_set_data_dir),
@@ -2888,6 +2889,11 @@ async fn admin_warm_up_account(
             )
         })?;
     Ok(Json(result))
+}
+
+async fn admin_get_available_models() -> impl IntoResponse {
+    let models = crate::modules::common_models::list_discovered_models();
+    Json(models)
 }
 
 async fn admin_save_http_api_settings(

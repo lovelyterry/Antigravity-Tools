@@ -1,6 +1,7 @@
 pub mod account;
 pub mod account_service;
 pub mod cache;
+pub mod common_models;
 pub mod config;
 pub mod db;
 pub mod device;
