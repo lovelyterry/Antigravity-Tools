@@ -30,12 +30,14 @@ const QuotaProtection = ({ config, onChange }: QuotaProtectionProps) => {
 
     const toggleModel = (model: string) => {
         const currentModels = config.monitored_models || [];
+        const protKey = getModelProtectionKey(model);
+        const isCurrentSelected = currentModels.some(m => m === model || (protKey && m === protKey));
         let newModels: string[];
 
-        if (currentModels.includes(model)) {
+        if (isCurrentSelected) {
             // 必须勾选其中一个，不能全取消
             if (currentModels.length <= 1) return;
-            newModels = currentModels.filter(m => m !== model);
+            newModels = currentModels.filter(m => m !== model && (!protKey || m !== protKey));
         } else {
             newModels = [...currentModels, model];
         }
