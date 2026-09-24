@@ -71,6 +71,10 @@ pub struct ScheduledWarmupConfig {
     /// List of models to warmup
     #[serde(default = "default_warmup_models")]
     pub monitored_models: Vec<String>,
+
+    /// Whether to also warmup 5-hour short quota windows
+    #[serde(default = "default_true")]
+    pub warmup_5h: bool,
 }
 
 fn default_warmup_models() -> Vec<String> {
@@ -87,6 +91,7 @@ impl ScheduledWarmupConfig {
         Self {
             enabled: false,
             monitored_models: default_warmup_models(),
+            warmup_5h: true,
         }
     }
 }

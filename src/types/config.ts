@@ -109,34 +109,10 @@ export interface StickySessionConfig {
     max_wait_seconds: number;
 }
 
-export type ZaiDispatchMode = 'off' | 'exclusive' | 'pooled' | 'fallback';
-
-export interface ZaiMcpConfig {
-    enabled: boolean;
-    web_search_enabled: boolean;
-    web_reader_enabled: boolean;
-    vision_enabled: boolean;
-}
-
-export interface ZaiModelDefaults {
-    opus: string;
-    sonnet: string;
-    haiku: string;
-}
-
-export interface ZaiConfig {
-    enabled: boolean;
-    base_url: string;
-    api_key: string;
-    dispatch_mode: ZaiDispatchMode;
-    model_mapping?: Record<string, string>;
-    models: ZaiModelDefaults;
-    mcp: ZaiMcpConfig;
-}
-
 export interface ScheduledWarmupConfig {
     enabled: boolean;
     monitored_models: string[];
+    warmup_5h?: boolean;
 }
 
 export interface QuotaProtectionConfig {

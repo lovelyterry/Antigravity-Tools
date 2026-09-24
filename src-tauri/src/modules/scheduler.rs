@@ -89,12 +89,70 @@ fn pick_model_for_group(group_name: &str, bucket_id: &str, monitored_models: &[S
     }
 }
 
-/// Start smart weekly scheduler
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuotaWindowType {
+    Weekly,
+    FiveHour,
+}
+
+impl QuotaWindowType {
+    fn from_window_and_bucket(window: &str, bucket_id: &str) -> Option<Self> {
+        let win_lower = window.to_lowercase();
+        let bid_lower = bucket_id.to_lowercase();
+        if win_lower.contains("week")
+            || bid_lower.contains("week")
+            || win_lower.contains("7d")
+            || bid_lower.contains("7d")
+        {
+            Some(Self::Weekly)
+        } else if win_lower.contains("5h")
+            || bid_lower.contains("5h")
+            || win_lower.contains("5 hour")
+            || win_lower.contains("5-hour")
+            || win_lower.contains("300m")
+        {
+            Some(Self::FiveHour)
+        } else {
+            None
+        }
+    }
+
+    fn from_reset_diff(seconds_until_reset: i64) -> Self {
+        if seconds_until_reset <= 6 * 3600 {
+            Self::FiveHour
+        } else {
+            Self::Weekly
+        }
+    }
+
+    fn cooldown_seconds(&self) -> i64 {
+        match self {
+            Self::Weekly => 6 * 86400,          // 6 days
+            Self::FiveHour => 4 * 3600 + 1800,  // 4.5 hours
+        }
+    }
+
+    fn tag(&self) -> &'static str {
+        match self {
+            Self::Weekly => "weekly",
+            Self::FiveHour => "5h",
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Weekly => "7-Day Weekly",
+            Self::FiveHour => "5-Hour Rolling",
+        }
+    }
+}
+
+/// Start smart weekly & 5-hour scheduler
 pub fn start_scheduler(
     proxy_state: crate::commands::proxy::ProxyServiceState,
 ) {
     tokio::spawn(async move {
-        logger::log_info("[Scheduler] Weekly Reset Warmup Scheduler started. Monitoring 7-day quota windows...");
+        logger::log_info("[Scheduler] Smart Warmup Scheduler started. Monitoring 7-day weekly & 5-hour quota windows...");
 
         // Scan every 5 minutes (300s) to check for accounts reaching weekly reset time
         let mut interval = time::interval(Duration::from_secs(300));
@@ -147,13 +205,11 @@ pub fn start_scheduler(
                 if let Some(groups) = &fresh_quota.quota_groups {
                     for group in groups {
                         for bucket in &group.buckets {
-                            let win_lower = bucket.window.to_lowercase();
-                            let bid_lower = bucket.bucket_id.to_lowercase();
-                            let is_weekly = win_lower.contains("week")
-                                || bid_lower.contains("week")
-                                || win_lower.contains("7d")
-                                || bid_lower.contains("7d");
-                            if !is_weekly {
+                            let Some(win_type) = QuotaWindowType::from_window_and_bucket(&bucket.window, &bucket.bucket_id) else {
+                                continue;
+                            };
+
+                            if win_type == QuotaWindowType::FiveHour && !app_config.scheduled_warmup.warmup_5h {
                                 continue;
                             }
 
@@ -162,12 +218,9 @@ pub fn start_scheduler(
                                 let reset_ts_opt = parse_reset_time_ts(&bucket.reset_time);
                                 let should_warmup = match reset_ts_opt {
                                     Some(reset_ts) => {
-                                        // Periodic reset: current time has passed reset_time (with 1 min buffer)
                                         now_ts >= reset_ts - 60
                                     }
                                     None => {
-                                        // Cold start: reset_time is empty (e.g. Gemini weekly bucket not yet activated this week)
-                                        // Triggering a warmup activates the 7-day timer upstream.
                                         true
                                     }
                                 };
@@ -175,17 +228,16 @@ pub fn start_scheduler(
                                 if should_warmup {
                                     let history_key = match reset_ts_opt {
                                         Some(reset_ts) => format!(
-                                            "{}:{}:weekly:{}",
-                                            acc.email, bucket.bucket_id, reset_ts
+                                            "{}:{}:{}:{}",
+                                            acc.email, bucket.bucket_id, win_type.tag(), reset_ts
                                         ),
                                         None => format!(
-                                            "{}:{}:weekly:initial",
-                                            acc.email, bucket.bucket_id
+                                            "{}:{}:{}:initial",
+                                            acc.email, bucket.bucket_id, win_type.tag()
                                         ),
                                     };
 
-                                    // 6-day cooldown for the same cycle
-                                    if !check_cooldown(&history_key, 6 * 86400) {
+                                    if !check_cooldown(&history_key, win_type.cooldown_seconds()) {
                                         let model_to_ping = pick_model_for_group(
                                             &group.display_name,
                                             &bucket.bucket_id,
@@ -199,6 +251,7 @@ pub fn start_scheduler(
                                             token.clone(),
                                             pid.clone(),
                                             history_key,
+                                            win_type.label(),
                                         ));
                                     }
                                 }
@@ -217,10 +270,14 @@ pub fn start_scheduler(
                                 continue;
                             }
                             if let Some(reset_ts) = parse_reset_time_ts(&model.reset_time) {
+                                let win_type = QuotaWindowType::from_reset_diff(reset_ts - now_ts);
+                                if win_type == QuotaWindowType::FiveHour && !app_config.scheduled_warmup.warmup_5h {
+                                    continue;
+                                }
                                 if now_ts >= reset_ts - 60 {
                                     let history_key =
-                                        format!("{}:{}:weekly:{}", acc.email, model.name, reset_ts);
-                                    if !check_cooldown(&history_key, 6 * 86400) {
+                                        format!("{}:{}:{}:{}", acc.email, model.name, win_type.tag(), reset_ts);
+                                    if !check_cooldown(&history_key, win_type.cooldown_seconds()) {
                                         tasks_to_run.push((
                                             acc.id.clone(),
                                             acc.email.clone(),
@@ -228,6 +285,7 @@ pub fn start_scheduler(
                                             token.clone(),
                                             pid.clone(),
                                             history_key,
+                                            win_type.label(),
                                         ));
                                     }
                                 }
@@ -247,10 +305,10 @@ pub fn start_scheduler(
                 let state_for_warmup = proxy_state.clone();
 
                 tokio::spawn(async move {
-                    for (acc_id, email, model, token, pid, history_key) in tasks_to_run {
+                    for (acc_id, email, model, token, pid, history_key, win_label) in tasks_to_run {
                         logger::log_info(&format!(
-                            "[WeeklyWarmup] 🚀 Triggering weekly warmup for {} @ {}",
-                            model, email
+                            "[SmartWarmup] 🚀 Triggering {} warmup for {} @ {}",
+                            win_label, model, email
                         ));
 
                         let success = quota::warmup_model_directly(
@@ -265,14 +323,14 @@ pub fn start_scheduler(
 
                         if success {
                             logger::log_info(&format!(
-                                "[WeeklyWarmup] ✅ Successfully warmed up {} for {}",
-                                model, email
+                                "[SmartWarmup] ✅ Successfully warmed up ({}) {} for {}",
+                                win_label, model, email
                             ));
                             record_warmup_history(&history_key, chrono::Utc::now().timestamp());
                         } else {
                             logger::log_warn(&format!(
-                                "[WeeklyWarmup] ❌ Warmup failed for {} on {}",
-                                model, email
+                                "[SmartWarmup] ❌ Warmup failed ({}) for {} on {}",
+                                win_label, model, email
                             ));
                         }
                         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -326,13 +384,11 @@ pub async fn trigger_warmup_for_account(account: &Account) {
     if let Some(groups) = fresh_quota.quota_groups {
         for group in groups {
             for bucket in group.buckets {
-                let win_lower = bucket.window.to_lowercase();
-                let bid_lower = bucket.bucket_id.to_lowercase();
-                let is_weekly = win_lower.contains("week")
-                    || bid_lower.contains("week")
-                    || win_lower.contains("7d")
-                    || bid_lower.contains("7d");
-                if !is_weekly {
+                let Some(win_type) = QuotaWindowType::from_window_and_bucket(&bucket.window, &bucket.bucket_id) else {
+                    continue;
+                };
+
+                if win_type == QuotaWindowType::FiveHour && !app_config.scheduled_warmup.warmup_5h {
                     continue;
                 }
 
@@ -340,23 +396,23 @@ pub async fn trigger_warmup_for_account(account: &Account) {
                     let reset_ts_opt = parse_reset_time_ts(&bucket.reset_time);
                     let should_warmup = match reset_ts_opt {
                         Some(reset_ts) => now_ts >= reset_ts - 60,
-                        None => true, // Cold-start for uninitialized weekly timer (Gemini)
+                        None => true,
                     };
 
                     if should_warmup {
                         let history_key = match reset_ts_opt {
                             Some(reset_ts) => {
                                 format!(
-                                    "{}:{}:weekly:{}",
-                                    account.email, bucket.bucket_id, reset_ts
+                                    "{}:{}:{}:{}",
+                                    account.email, bucket.bucket_id, win_type.tag(), reset_ts
                                 )
                             }
                             None => {
-                                format!("{}:{}:weekly:initial", account.email, bucket.bucket_id)
+                                format!("{}:{}:{}:initial", account.email, bucket.bucket_id, win_type.tag())
                             }
                         };
 
-                        if !check_cooldown(&history_key, 6 * 86400) {
+                        if !check_cooldown(&history_key, win_type.cooldown_seconds()) {
                             let model_to_ping = pick_model_for_group(
                                 &group.display_name,
                                 &bucket.bucket_id,

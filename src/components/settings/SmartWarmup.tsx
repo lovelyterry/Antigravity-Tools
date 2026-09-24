@@ -118,6 +118,25 @@ const SmartWarmup: React.FC<SmartWarmupProps> = ({ config, onChange }) => {
                                 {t('settings.warmup.monitored_models_desc', '勾选需要预热的模型。在周配额到达重置时间后将自动唤醒 1 次启动新周期。')}
                             </p>
                         </div>
+
+                        {/* 5小时配额预热子开关 */}
+                        <div className="pt-3 border-t border-gray-100 dark:border-base-200 flex items-center justify-between">
+                            <div>
+                                <span className="text-xs font-semibold text-gray-800 dark:text-gray-200">
+                                    {t('settings.warmup.warmup_5h_title', '同时预热 5 小时滚动配额 (5-Hour Quota)')}
+                                </span>
+                                <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+                                    {t('settings.warmup.warmup_5h_desc', '当账号 5 小时短期配额满额 (100%) 时自动激活，构建多账号循环阶梯可用池。')}
+                                </p>
+                            </div>
+                            <input
+                                type="checkbox"
+                                className="toggle toggle-sm toggle-warning"
+                                checked={config.warmup_5h ?? true}
+                                disabled={!config.enabled}
+                                onChange={(e) => onChange({ ...config, warmup_5h: e.target.checked })}
+                            />
+                        </div>
                     </div>
                 </div>
             )}
